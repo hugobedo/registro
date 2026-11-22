@@ -1,0 +1,381 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authorized clinical staff profile with role-based access control for ACE-MED.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 200
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 150
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "staff"]
+        },
+        "approved": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "displayName", "role", "approved", "createdAt", "updatedAt"]
+    },
+    "Patient": {
+      "title": "Patient",
+      "description": "Shared clinical shift patient record synced in real time across devices with optimistic concurrency control.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "workspaceId": {
+          "type": "string",
+          "enum": ["acemed_guardia"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "createdAtIso": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "updatedAtIso": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "createdByUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdByEmail": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "updatedByUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedByEmail": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "version": {
+          "type": "integer"
+        },
+        "horaEntrada": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "horaSalida": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "estadoEgreso": {
+          "type": "string",
+          "enum": ["en_atencion", "atendido", "no_espero_turno", "no_atendido", "trasladado"]
+        },
+        "tratamiento": {
+          "type": "string",
+          "enum": ["paciente", "usuario", "usuaria"]
+        },
+        "nombre": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "edad": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "procedencia": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "motivoVisita": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "observaciones": {
+          "type": "string",
+          "maxLength": 1500
+        },
+        "observacionesSalida": {
+          "type": "string",
+          "maxLength": 1500
+        },
+        "medico": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "enfermera": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "diagnostico": {
+          "type": "string",
+          "maxLength": 1500
+        }
+      },
+      "required": [
+        "id",
+        "workspaceId",
+        "createdAt",
+        "updatedAt",
+        "createdAtIso",
+        "updatedAtIso",
+        "createdByUid",
+        "createdByEmail",
+        "updatedByUid",
+        "updatedByEmail",
+        "version",
+        "horaEntrada",
+        "horaSalida",
+        "estadoEgreso",
+        "tratamiento",
+        "nombre",
+        "edad",
+        "procedencia",
+        "motivoVisita",
+        "observaciones",
+        "observacionesSalida",
+        "medico",
+        "enfermera",
+        "diagnostico"
+      ]
+    },
+    "ShiftConfig": {
+      "title": "ShiftConfig",
+      "description": "Shared clinical shift configuration including permanent supervisor and WhatsApp group URL.",
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "enum": ["acemed_guardia"]
+        },
+        "responsableGuardia": {
+          "type": "string",
+          "maxLength": 150
+        },
+        "whatsappGroupUrl": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "incluirCamposVaciosEnMensaje": {
+          "type": "boolean"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedByUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedByEmail": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "workspaceId",
+        "responsableGuardia",
+        "whatsappGroupUrl",
+        "incluirCamposVaciosEnMensaje",
+        "updatedAt",
+        "updatedByUid",
+        "updatedByEmail"
+      ]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable append-only clinical audit trail recording creations, modifications, discharges, backups, and bulk deletions.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "workspaceId": {
+          "type": "string",
+          "enum": ["acemed_guardia"]
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "create_patient",
+            "update_patient",
+            "register_discharge",
+            "delete_patient",
+            "delete_all_patients",
+            "restore_backup",
+            "migrate_local",
+            "update_staff",
+            "approve_access_request",
+            "reject_access_request",
+            "revoke_staff_access"
+          ]
+        },
+        "actorUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "actorEmail": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "actorName": {
+          "type": "string",
+          "maxLength": 150
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "affectedCount": {
+          "type": "integer"
+        },
+        "patientId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "createdAtIso": {
+          "type": "string",
+          "maxLength": 40
+        }
+      },
+      "required": [
+        "id",
+        "workspaceId",
+        "action",
+        "actorUid",
+        "actorEmail",
+        "actorName",
+        "summary",
+        "affectedCount",
+        "patientId",
+        "createdAt",
+        "createdAtIso"
+      ]
+    },
+    "AccessRequest": {
+      "title": "AccessRequest",
+      "description": "Access request submitted by a verified Google user awaiting primary administrator approval (one document per UID, zero patient data).",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 200
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 150
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pendiente", "aprobada", "rechazada"]
+        },
+        "requestedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "requestedAtIso": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reviewedByUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "reviewedByEmail": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "reviewedAtIso": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "assignedRole": {
+          "type": "string",
+          "enum": ["", "staff", "admin"]
+        }
+      },
+      "required": [
+        "uid",
+        "email",
+        "displayName",
+        "status",
+        "requestedAt",
+        "requestedAtIso",
+        "updatedAt",
+        "reviewedByUid",
+        "reviewedByEmail",
+        "reviewedAtIso",
+        "assignedRole"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Authorized clinical staff profiles and RBAC approvals (PII isolated to owner and primary admin)."
+    },
+    "/access_requests/{userId}": {
+      "schema": { "$ref": "#/entities/AccessRequest" },
+      "description": "One-per-account access requests managed exclusively by the primary administrator."
+    },
+    "/patients/{patientId}": {
+      "schema": { "$ref": "#/entities/Patient" },
+      "description": "Shared real-time patient records for the clinical shift."
+    },
+    "/shift_config/{configId}": {
+      "schema": { "$ref": "#/entities/ShiftConfig" },
+      "description": "Shared shift configuration anchored to HUGO ALBERTO ACEBEDO CRUZ."
+    },
+    "/audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Append-only immutable audit log of clinical operations, access decisions, and bulk deletions."
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "ACE-MED",
+  "description": "Herramienta clínica en español para redactar, organizar y corregir registros de atención a pacientes durante una guardia, preparar mensajes para WhatsApp y generar informes en PDF.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

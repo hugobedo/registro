@@ -1,0 +1,6 @@
+{
+  "firestore": {
+    "database": "ai-studio-acemed-15cdfd34-3421-4461-9926-c16f007e8a98",
+    "rules": "firestore.rules"
+  }
+}

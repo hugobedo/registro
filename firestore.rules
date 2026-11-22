@@ -1,0 +1,431 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ---------------------------------------------------------
+    // Global Hardened Helpers (Eight Pillars)
+    // ---------------------------------------------------------
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn()
+        && request.auth.token.email == 'hugoac.bedo@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+
+    function isPrimaryAdmin() {
+      return isBootstrappedAdmin();
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.approved == true
+      );
+    }
+
+    function isApprovedStaff() {
+      return isBootstrappedAdmin() || (
+        isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.approved == true
+      );
+    }
+
+    // ---------------------------------------------------------
+    // Entity Validation Blueprints (Anti-Update-Gap)
+    // ---------------------------------------------------------
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'approved', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'role', 'approved', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.displayName is string && data.displayName.size() <= 150
+        && data.role in ['admin', 'staff']
+        && data.approved is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAccessRequest(data, userId) {
+      return data.keys().hasAll([
+          'uid', 'email', 'displayName', 'status',
+          'requestedAt', 'requestedAtIso', 'updatedAt',
+          'reviewedByUid', 'reviewedByEmail', 'reviewedAtIso', 'assignedRole'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'email', 'displayName', 'status',
+          'requestedAt', 'requestedAtIso', 'updatedAt',
+          'reviewedByUid', 'reviewedByEmail', 'reviewedAtIso', 'assignedRole'
+        ])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.displayName is string && data.displayName.size() <= 150
+        && data.status in ['pendiente', 'aprobada', 'rechazada']
+        && data.requestedAt is timestamp
+        && data.requestedAtIso is string && data.requestedAtIso.size() >= 1 && data.requestedAtIso.size() <= 40
+        && data.updatedAt is timestamp
+        && data.reviewedByUid is string && data.reviewedByUid.size() <= 128
+        && data.reviewedByEmail is string && data.reviewedByEmail.size() <= 200
+        && data.reviewedAtIso is string && data.reviewedAtIso.size() <= 40
+        && data.assignedRole in ['', 'staff', 'admin'];
+    }
+
+    function isValidPatient(data, patientId) {
+      return data.keys().hasAll([
+          'id', 'workspaceId', 'createdAt', 'updatedAt', 'createdAtIso', 'updatedAtIso',
+          'createdByUid', 'createdByEmail', 'updatedByUid', 'updatedByEmail', 'version',
+          'horaEntrada', 'horaSalida', 'estadoEgreso', 'tratamiento', 'nombre', 'edad',
+          'procedencia', 'motivoVisita', 'observaciones', 'observacionesSalida',
+          'medico', 'enfermera', 'diagnostico'
+        ])
+        && data.keys().hasOnly([
+          'id', 'workspaceId', 'createdAt', 'updatedAt', 'createdAtIso', 'updatedAtIso',
+          'createdByUid', 'createdByEmail', 'updatedByUid', 'updatedByEmail', 'version',
+          'horaEntrada', 'horaSalida', 'estadoEgreso', 'tratamiento', 'nombre', 'edad',
+          'procedencia', 'motivoVisita', 'observaciones', 'observacionesSalida',
+          'medico', 'enfermera', 'diagnostico'
+        ])
+        && isValidId(data.id)
+        && data.id == patientId
+        && data.workspaceId == 'acemed_guardia'
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.createdAtIso is string && data.createdAtIso.size() <= 40
+        && data.updatedAtIso is string && data.updatedAtIso.size() <= 40
+        && isValidId(data.createdByUid)
+        && data.createdByEmail is string && data.createdByEmail.size() <= 200
+        && isValidId(data.updatedByUid)
+        && data.updatedByUid == request.auth.uid
+        && data.updatedByEmail is string && data.updatedByEmail.size() <= 200
+        && data.version is int && data.version >= 1 && data.version <= 1000000
+        && data.horaEntrada is string && data.horaEntrada.size() <= 10
+        && data.horaSalida is string && data.horaSalida.size() <= 10
+        && data.estadoEgreso in ['en_atencion', 'atendido', 'no_espero_turno', 'no_atendido', 'trasladado']
+        && data.tratamiento in ['paciente', 'usuario', 'usuaria']
+        && data.nombre is string && data.nombre.size() <= 200
+        && data.edad is string && data.edad.size() <= 60
+        && data.procedencia is string && data.procedencia.size() <= 200
+        && data.motivoVisita is string && data.motivoVisita.size() <= 1000
+        && data.observaciones is string && data.observaciones.size() <= 1500
+        && data.observacionesSalida is string && data.observacionesSalida.size() <= 1500
+        && data.medico is string && data.medico.size() <= 200
+        && data.enfermera is string && data.enfermera.size() <= 200
+        && data.diagnostico is string && data.diagnostico.size() <= 1500;
+    }
+
+    function isValidShiftConfig(data) {
+      return data.keys().hasAll([
+          'workspaceId', 'responsableGuardia', 'whatsappGroupUrl',
+          'incluirCamposVaciosEnMensaje', 'updatedAt', 'updatedByUid', 'updatedByEmail'
+        ])
+        && data.keys().hasOnly([
+          'workspaceId', 'responsableGuardia', 'whatsappGroupUrl',
+          'incluirCamposVaciosEnMensaje', 'updatedAt', 'updatedByUid', 'updatedByEmail'
+        ])
+        && data.workspaceId == 'acemed_guardia'
+        && data.responsableGuardia == 'HUGO ALBERTO ACEBEDO CRUZ'
+        && data.whatsappGroupUrl is string && data.whatsappGroupUrl.size() <= 300
+        && data.incluirCamposVaciosEnMensaje is bool
+        && data.updatedAt is timestamp
+        && isValidId(data.updatedByUid)
+        && data.updatedByUid == request.auth.uid
+        && data.updatedByEmail is string && data.updatedByEmail.size() <= 200;
+    }
+
+    function isValidAuditLog(data, logId) {
+      return data.keys().hasAll([
+          'id', 'workspaceId', 'action', 'actorUid', 'actorEmail',
+          'actorName', 'summary', 'affectedCount', 'patientId',
+          'createdAt', 'createdAtIso'
+        ])
+        && data.keys().hasOnly([
+          'id', 'workspaceId', 'action', 'actorUid', 'actorEmail',
+          'actorName', 'summary', 'affectedCount', 'patientId',
+          'createdAt', 'createdAtIso'
+        ])
+        && isValidId(data.id)
+        && data.id == logId
+        && data.workspaceId == 'acemed_guardia'
+        && data.action in [
+          'create_patient', 'update_patient', 'register_discharge',
+          'delete_patient', 'delete_all_patients', 'restore_backup',
+          'migrate_local', 'update_staff',
+          'approve_access_request', 'reject_access_request', 'revoke_staff_access'
+        ]
+        && isValidId(data.actorUid)
+        && data.actorUid == request.auth.uid
+        && data.actorEmail is string && data.actorEmail.size() <= 200
+        && data.actorName is string && data.actorName.size() <= 150
+        && data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 500
+        && data.affectedCount is int && data.affectedCount >= 0 && data.affectedCount <= 10000
+        && data.patientId is string && data.patientId.size() <= 128
+        && data.createdAt is timestamp
+        && data.createdAtIso is string && data.createdAtIso.size() <= 40;
+    }
+
+    // ---------------------------------------------------------
+    // Collection: users/{userId} (PII isolated to owner or primary admin)
+    // ---------------------------------------------------------
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isPrimaryAdmin());
+      allow list: if isSignedIn() && resource.data.approved == true && isPrimaryAdmin();
+
+      allow create: if isSignedIn()
+        && isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          // Action 1: Verified owner creating their own initial profile
+          (
+            isOwner(userId)
+            && incoming().email == request.auth.token.email
+            && (
+              (isBootstrappedAdmin() && incoming().role == 'admin' && incoming().approved == true)
+              || (!isBootstrappedAdmin() && incoming().role == 'staff' && incoming().approved == false)
+            )
+          )
+          // Action 2: Primary admin provisioning an approved staff profile from an access request
+          || (
+            isPrimaryAdmin()
+            && userId != request.auth.uid
+            && incoming().approved == true
+            && incoming().role in ['staff', 'admin']
+          )
+        );
+
+      allow update: if isSignedIn()
+        && isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action 1: Primary admin managing staff approval or role (cannot alter self)
+          (
+            isPrimaryAdmin()
+            && userId != request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'approved', 'displayName', 'updatedAt'])
+          )
+          // Action 2: Owner refreshing their own displayName only (no role/approval escalation)
+          || (
+            isOwner(userId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt'])
+            && incoming().role == existing().role
+            && incoming().approved == existing().approved
+          )
+        );
+
+      allow delete: if isSignedIn() && isValidId(userId) && isPrimaryAdmin() && userId != request.auth.uid;
+    }
+
+    // ---------------------------------------------------------
+    // Collection: access_requests/{userId} (One request per account)
+    // ---------------------------------------------------------
+    match /access_requests/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isPrimaryAdmin());
+      allow list: if isSignedIn() && resource.data.status == 'pendiente' && isPrimaryAdmin();
+
+      allow create: if isSignedIn()
+        && isValidId(userId)
+        && isOwner(userId)
+        && !isPrimaryAdmin()
+        && isValidAccessRequest(incoming(), userId)
+        && incoming().email == request.auth.token.email
+        && incoming().status == 'pendiente'
+        && incoming().requestedAt == request.time
+        && incoming().updatedAt == request.time
+        && incoming().reviewedByUid == ''
+        && incoming().reviewedByEmail == ''
+        && incoming().reviewedAtIso == ''
+        && incoming().assignedRole == ''
+        && (
+          !exists(/databases/$(database)/documents/users/$(userId))
+          || get(/databases/$(database)/documents/users/$(userId)).data.approved == false
+        );
+
+      allow update: if isSignedIn()
+        && isValidId(userId)
+        && isValidAccessRequest(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().email == existing().email
+        && incoming().updatedAt == request.time
+        && (
+          // Action 1: Primary admin approving or rejecting a pending request
+          (
+            isPrimaryAdmin()
+            && userId != request.auth.uid
+            && existing().status == 'pendiente'
+            && incoming().requestedAt == existing().requestedAt
+            && incoming().requestedAtIso == existing().requestedAtIso
+            && incoming().reviewedByUid == request.auth.uid
+            && incoming().reviewedByEmail == request.auth.token.email
+            && incoming().reviewedAtIso.size() >= 1
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'updatedAt', 'reviewedByUid', 'reviewedByEmail', 'reviewedAtIso', 'assignedRole'
+            ])
+            && (
+              (incoming().status == 'aprobada' && incoming().assignedRole in ['staff', 'admin'])
+              || (incoming().status == 'rechazada' && incoming().assignedRole == '')
+            )
+          )
+          // Action 2: Unapproved owner re-submitting after rejection or access revocation
+          || (
+            isOwner(userId)
+            && !isPrimaryAdmin()
+            && existing().status != 'pendiente'
+            && incoming().status == 'pendiente'
+            && incoming().requestedAt == request.time
+            && incoming().reviewedByUid == ''
+            && incoming().reviewedByEmail == ''
+            && incoming().reviewedAtIso == ''
+            && incoming().assignedRole == ''
+            && (
+              !exists(/databases/$(database)/documents/users/$(userId))
+              || get(/databases/$(database)/documents/users/$(userId)).data.approved == false
+            )
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName', 'status', 'requestedAt', 'requestedAtIso', 'updatedAt',
+              'reviewedByUid', 'reviewedByEmail', 'reviewedAtIso', 'assignedRole'
+            ])
+          )
+        );
+
+      allow delete: if false;
+    }
+
+    // ---------------------------------------------------------
+    // Collection: patients/{patientId} (Shared clinical database)
+    // ---------------------------------------------------------
+    match /patients/{patientId} {
+      allow get: if isSignedIn() && isValidId(patientId) && isApprovedStaff();
+      allow list: if isSignedIn() && resource.data.workspaceId == 'acemed_guardia' && isApprovedStaff();
+
+      allow create: if isSignedIn()
+        && isValidId(patientId)
+        && isValidPatient(incoming(), patientId)
+        && incoming().createdByUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && incoming().version == 1
+        && isApprovedStaff();
+
+      allow update: if isSignedIn()
+        && isValidId(patientId)
+        && isValidPatient(incoming(), patientId)
+        && incoming().id == existing().id
+        && incoming().workspaceId == existing().workspaceId
+        && incoming().createdAt == existing().createdAt
+        && incoming().createdAtIso == existing().createdAtIso
+        && incoming().createdByUid == existing().createdByUid
+        && incoming().createdByEmail == existing().createdByEmail
+        && incoming().updatedAt == request.time
+        && incoming().version == existing().version + 1
+        && isApprovedStaff()
+        && (
+          // Action 1: Admin full update of mutable clinical fields
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
+            'horaEntrada', 'horaSalida', 'estadoEgreso', 'tratamiento', 'nombre', 'edad',
+            'procedencia', 'motivoVisita', 'observaciones', 'observacionesSalida',
+            'medico', 'enfermera', 'diagnostico',
+            'updatedAt', 'updatedAtIso', 'updatedByUid', 'updatedByEmail', 'version'
+          ]))
+          // Action 2: Approved staff registering or updating discharge details
+          || (incoming().diff(existing()).affectedKeys().hasOnly([
+            'horaSalida', 'estadoEgreso', 'observacionesSalida',
+            'medico', 'enfermera', 'diagnostico',
+            'updatedAt', 'updatedAtIso', 'updatedByUid', 'updatedByEmail', 'version'
+          ]))
+          // Action 3: Approved staff editing active patient intake details (before terminal exit)
+          || (existing().estadoEgreso == 'en_atencion' && incoming().diff(existing()).affectedKeys().hasOnly([
+            'horaEntrada', 'horaSalida', 'estadoEgreso', 'tratamiento', 'nombre', 'edad',
+            'procedencia', 'motivoVisita', 'observaciones', 'observacionesSalida',
+            'medico', 'enfermera', 'diagnostico',
+            'updatedAt', 'updatedAtIso', 'updatedByUid', 'updatedByEmail', 'version'
+          ]))
+        );
+
+      allow delete: if isSignedIn() && isValidId(patientId) && isApprovedStaff();
+    }
+
+    // ---------------------------------------------------------
+    // Collection: shift_config/{configId} (Permanent supervisor)
+    // ---------------------------------------------------------
+    match /shift_config/{configId} {
+      allow get: if isSignedIn() && configId == 'current' && isApprovedStaff();
+      allow list: if false;
+
+      allow create: if isSignedIn()
+        && configId == 'current'
+        && isValidShiftConfig(incoming())
+        && incoming().updatedAt == request.time
+        && isApprovedStaff();
+
+      allow update: if isSignedIn()
+        && configId == 'current'
+        && isValidShiftConfig(incoming())
+        && incoming().workspaceId == existing().workspaceId
+        && incoming().responsableGuardia == 'HUGO ALBERTO ACEBEDO CRUZ'
+        && incoming().updatedAt == request.time
+        && isApprovedStaff()
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'whatsappGroupUrl', 'incluirCamposVaciosEnMensaje',
+          'updatedAt', 'updatedByUid', 'updatedByEmail'
+        ]);
+
+      allow delete: if false;
+    }
+
+    // ---------------------------------------------------------
+    // Collection: audit_logs/{logId} (Immutable audit trail)
+    // ---------------------------------------------------------
+    match /audit_logs/{logId} {
+      allow get: if isSignedIn() && isValidId(logId) && isApprovedStaff();
+      allow list: if isSignedIn() && resource.data.workspaceId == 'acemed_guardia' && isApprovedStaff();
+
+      allow create: if isSignedIn()
+        && isValidId(logId)
+        && isValidAuditLog(incoming(), logId)
+        && incoming().createdAt == request.time
+        && isApprovedStaff()
+        && (
+          !(incoming().action in ['update_staff', 'approve_access_request', 'reject_access_request', 'revoke_staff_access'])
+          || (isPrimaryAdmin() && incoming().patientId == '')
+        );
+
+      allow update, delete: if false;
+    }
+  }
+}

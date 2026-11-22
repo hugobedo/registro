@@ -1,0 +1,3037 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ACE-MED — Control de Guardia Clínica</title>
+  <meta name="description" content="Sistema de registro, seguimiento y control de pacientes en guardia con base de datos compartida en tiempo real, dictado por voz, corrección ortográfica, WhatsApp e informes PDF." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@600;700;800&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <style>
+    :root {
+      --font-display: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+      --font-body: 'Public Sans', system-ui, -apple-system, sans-serif;
+      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+    }
+    body { font-family: var(--font-body); }
+    h1, h2, h3, .font-display { font-family: var(--font-display); }
+    .font-mono-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+    .tabular-nums { font-variant-numeric: tabular-nums; }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased min-h-screen flex flex-col selection:bg-teal-100 selection:text-teal-950">
+  <div id="root" class="flex-1 flex flex-col">
+    <main class="min-h-screen flex items-center justify-center p-6">
+      <section class="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 text-center">
+        <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-teal-700 font-display text-lg font-bold text-white">AM</div>
+        <h1 class="mt-4 text-xl font-bold text-slate-900">Iniciando ACE-MED</h1>
+        <p class="mt-1.5 text-sm text-slate-600">Conectando con la base de datos compartida en la nube...</p>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" role="status" aria-live="polite" class="hidden fixed bottom-20 md:bottom-5 right-4 z-50 max-w-sm rounded-xl border border-slate-800 bg-slate-900 px-4 py-3 text-sm font-medium text-white shadow-lg"></div>
+
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js';
+    import {
+      getAuth,
+      GoogleAuthProvider,
+      onAuthStateChanged,
+      signInWithPopup,
+      signOut
+    } from 'https://www.gstatic.com/firebasejs/11.6.0/firebase-auth.js';
+    import {
+      collection,
+      deleteDoc,
+      doc,
+      getDoc,
+      getDocFromServer,
+      getDocsFromServer,
+      getFirestore,
+      onSnapshot,
+      query,
+      runTransaction,
+      serverTimestamp,
+      setDoc,
+      updateDoc,
+      where,
+      writeBatch
+    } from 'https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js';
+
+    // =========================================================================
+    // 1. CONFIGURACIÓN INSTITUCIONAL Y CONEXIÓN FIREBASE COMPARTIDA
+    // =========================================================================
+    const FIREBASE_CONFIG = {
+      projectId: 'original-water-mbpf3',
+      appId: '1:750849715856:web:31568fba0626d1b509f215',
+      apiKey: 'AIzaSyAxVap8G7A9gRJr7MxAA-4WE2p81_f6ie8',
+      authDomain: 'original-water-mbpf3.firebaseapp.com',
+      firestoreDatabaseId: 'ai-studio-acemed-15cdfd34-3421-4461-9926-c16f007e8a98',
+      storageBucket: 'original-water-mbpf3.firebasestorage.app',
+      messagingSenderId: '750849715856'
+    };
+
+    const WORKSPACE_ID = 'acemed_guardia';
+    const ADMIN_EMAIL = 'hugoac.bedo@gmail.com';
+    const DEFAULT_SHIFT_SUPERVISOR = 'HUGO ALBERTO ACEBEDO CRUZ';
+    const DEFAULT_WHATSAPP_GROUP_URL = 'https://chat.whatsapp.com/JuLkCeZy7AU5m6rybWy3Jr';
+    const LEGACY_LOCAL_KEY = 'acemed_shift_state_v1';
+    const MIGRATION_DONE_KEY = 'acemed_cloud_migrated_v1';
+
+    const MOTIVO_SUGGESTIONS = [
+      'Cefalea', 'Dolor abdominal', 'Dolor intestinal', 'Fiebre', 'Tos',
+      'Dificultad para respirar', 'Náuseas', 'Vómito', 'Diarrea', 'Mareo',
+      'Dolor torácico', 'Dolor de garganta', 'Lesión o herida', 'Control de presión arterial'
+    ];
+
+    const OBS_ENTRADA_SUGGESTIONS = [
+      'Acude por propio pie', 'Acude acompañado por familiar', 'Sin acompañante',
+      'Ingresa en silla de ruedas', 'Ingresa en ambulancia',
+      'Trae estudios o receta previa', 'En espera de valoración', 'Sin diagnóstico al ingreso'
+    ];
+
+    const EXIT_OUTCOMES = [
+      { value: 'atendido', label: 'Atendido', desc: 'Recibió valoración o atención y registró salida.' },
+      { value: 'no_espero_turno', label: 'No esperó turno', desc: 'Se retiró antes de pasar a consulta o valoración.' },
+      { value: 'no_atendido', label: 'No atendido', desc: 'No fue posible brindarle atención en esta unidad.' },
+      { value: 'trasladado', label: 'Trasladado a otra unidad', desc: 'Referido o trasladado a otro centro de atención.' }
+    ];
+
+    const OperationType = {
+      CREATE: 'create',
+      UPDATE: 'update',
+      DELETE: 'delete',
+      LIST: 'list',
+      GET: 'get',
+      WRITE: 'write'
+    };
+
+    const app = initializeApp(FIREBASE_CONFIG);
+    const db = getFirestore(app, FIREBASE_CONFIG.firestoreDatabaseId);
+    const auth = getAuth(app);
+    const googleProvider = new GoogleAuthProvider();
+    googleProvider.setCustomParameters({ prompt: 'select_account' });
+
+    async function testConnection() {
+      try {
+        await getDocFromServer(doc(db, 'test', 'connection'));
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('the client is offline')) {
+          console.error('Verifica la conexión con Firebase Firestore.');
+        }
+      }
+    }
+    void testConnection();
+
+    function handleFirestoreError(error, operationType, path) {
+      const errInfo = {
+        error: error instanceof Error ? error.message : String(error),
+        authInfo: {
+          userId: auth.currentUser?.uid ?? null,
+          email: auth.currentUser?.email ?? null,
+          emailVerified: auth.currentUser?.emailVerified ?? null,
+          isAnonymous: auth.currentUser?.isAnonymous ?? null,
+          tenantId: auth.currentUser?.tenantId ?? null,
+          providerInfo: (auth.currentUser?.providerData || []).map((p) => ({
+            providerId: p.providerId,
+            email: p.email
+          }))
+        },
+        operationType,
+        path
+      };
+      console.error('Firestore Error:', JSON.stringify(errInfo));
+      throw new Error(JSON.stringify(errInfo));
+    }
+
+    // =========================================================================
+    // 2. ESTADO GLOBAL DE LA APLICACIÓN
+    // =========================================================================
+    const state = {
+      authReady: false,
+      user: null,
+      profile: null,
+      profileLoading: false,
+      isSigningIn: false,
+      authError: '',
+      patients: [],
+      patientsLoaded: false,
+      fromCache: false,
+      auditLogs: [],
+      staffUsers: [],
+      staffUsersError: '',
+      accessRequests: [],
+      accessRequestsLoading: false,
+      accessRequestsError: '',
+      ownAccessRequest: null,
+      isSubmittingRequest: false,
+      requestFeedback: null,
+      accessSubTab: 'requests',
+      requestRoleDrafts: {},
+      accessPanelNotice: null,
+      accessBusyKey: '',
+      shiftConfig: {
+        workspaceId: WORKSPACE_ID,
+        responsableGuardia: DEFAULT_SHIFT_SUPERVISOR,
+        whatsappGroupUrl: DEFAULT_WHATSAPP_GROUP_URL,
+        incluirCamposVaciosEnMensaje: false
+      },
+      activeView: 'pacientes',
+      searchQuery: '',
+      statusFilter: 'todos',
+      editingPatientId: null,
+      isSaving: false,
+      conflictNotice: '',
+      runtimeError: '',
+      formError: '',
+      // Formularios en memoria
+      intakeForm: null,
+      dischargeModal: null,
+      whatsappModal: null,
+      reportModalOpen: false,
+      clearModal: null,
+      spellModal: null,
+      deleteConfirmPatientId: null,
+      // Voz
+      activeVoiceKey: null,
+      // Migración local
+      migrationAttempted: false,
+      unsubs: []
+    };
+
+    let recognition = null;
+    let toastTimer = null;
+
+    // =========================================================================
+    // 3. UTILIDADES CLÍNICAS, HORAS 12H, PREFIJOS AUTOMÁTICOS Y ORTOGRAFÍA
+    // =========================================================================
+    function esc(v) {
+      return String(v ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function clamp(v, max) {
+      return typeof v === 'string' ? v.trim().slice(0, max) : '';
+    }
+
+    function showToast(msg) {
+      const el = document.getElementById('toast');
+      if (!el) return;
+      el.textContent = msg;
+      el.classList.remove('hidden');
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => el.classList.add('hidden'), 3600);
+    }
+
+    function pad2(n) { return String(n).padStart(2, '0'); }
+
+    function nowTime24() {
+      const d = new Date();
+      return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    }
+
+    function parse24To12(t24) {
+      const m = /^(\d{1,2}):(\d{2})$/.exec(String(t24 || '').trim());
+      if (!m) return { h: '', m: '', p: 'AM' };
+      const h24 = parseInt(m[1], 10);
+      const min = parseInt(m[2], 10);
+      if (h24 < 0 || h24 > 23 || min < 0 || min > 59) return { h: '', m: '', p: 'AM' };
+      return { h: String(h24 % 12 === 0 ? 12 : h24 % 12), m: pad2(min), p: h24 >= 12 ? 'PM' : 'AM' };
+    }
+
+    function to24From12(h, m, p) {
+      const hi = parseInt(h, 10);
+      const mi = parseInt(m, 10);
+      if (Number.isNaN(hi) || Number.isNaN(mi) || hi < 1 || hi > 12 || mi < 0 || mi > 59) return '';
+      let h24 = hi % 12;
+      if (p === 'PM') h24 += 12;
+      return `${pad2(h24)}:${pad2(mi)}`;
+    }
+
+    function fmt12(t24) {
+      const x = parse24To12(t24);
+      if (!x.h) return '—';
+      return `${x.h}:${x.m} ${x.p === 'PM' ? 'p. m.' : 'a. m.'}`;
+    }
+
+    function fmtDateEs(d = new Date()) {
+      const s = new Intl.DateTimeFormat('es-MX', {
+        weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+      }).format(d);
+      return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+
+    function fmtDateTimeShort(iso) {
+      try {
+        return new Intl.DateTimeFormat('es-MX', {
+          day: '2-digit', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true
+        }).format(new Date(iso));
+      } catch {
+        return iso || '';
+      }
+    }
+
+    function safeId(prefix, raw) {
+      if (raw) {
+        const cleaned = String(raw).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120);
+        if (cleaned) return cleaned;
+      }
+      const idPart = typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID().replace(/-/g, '')
+        : `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      return `${prefix}_${idPart}`.slice(0, 120);
+    }
+
+    function getOutcome(p) {
+      if (['atendido', 'no_espero_turno', 'no_atendido', 'trasladado'].includes(p.estadoEgreso)) {
+        return p.estadoEgreso;
+      }
+      return (p.horaSalida || '').trim() ? 'atendido' : 'en_atencion';
+    }
+
+    function hasExit(p) { return getOutcome(p) !== 'en_atencion'; }
+
+    function outcomeLabel(o) {
+      switch (o) {
+        case 'atendido': return 'Atendido';
+        case 'no_espero_turno': return 'No esperó turno';
+        case 'no_atendido': return 'No atendido';
+        case 'trasladado': return 'Trasladado a otra unidad';
+        default: return 'En atención (sin salida)';
+      }
+    }
+
+    function outcomeTextColor(o) {
+      switch (o) {
+        case 'atendido': return 'text-emerald-800';
+        case 'no_espero_turno': return 'text-orange-800';
+        case 'no_atendido': return 'text-red-800';
+        case 'trasladado': return 'text-blue-800';
+        default: return 'text-amber-800';
+      }
+    }
+
+    function treatmentLabel(t) {
+      if (t === 'usuario') return 'Usuario';
+      if (t === 'usuaria') return 'Usuaria';
+      return 'Paciente';
+    }
+
+    function computeCounts(list) {
+      const c = { total: list.length, enAtencion: 0, atendidos: 0, noEsperoTurno: 0, noAtendidos: 0, trasladados: 0 };
+      for (const p of list) {
+        const o = getOutcome(p);
+        if (o === 'atendido') c.atendidos++;
+        else if (o === 'no_espero_turno') c.noEsperoTurno++;
+        else if (o === 'no_atendido') c.noAtendidos++;
+        else if (o === 'trasladado') c.trasladados++;
+        else c.enAtencion++;
+      }
+      return c;
+    }
+
+    // Prefijos automáticos sin duplicar DR./DRA. y ENF.
+    function stripDoctorPrefix(raw) {
+      let s = String(raw || '').trim();
+      const re = /^(?:dr\.?a?\.?|dra\.?|doctor|doctora)\s+/i;
+      while (re.test(s)) s = s.replace(re, '').trim();
+      return s;
+    }
+
+    function detectDoctorTitle(raw) {
+      return /^(?:dra\.?|doctora)\b/i.test(String(raw || '').trim()) ? 'DRA.' : 'DR.';
+    }
+
+    function formatDoctor(title, rawName) {
+      const base = stripDoctorPrefix(rawName);
+      if (!base) return '';
+      return `${title === 'DRA.' ? 'DRA.' : 'DR.'} ${base}`;
+    }
+
+    function stripNursePrefix(raw) {
+      let s = String(raw || '').trim();
+      const re = /^(?:enf\.?a?\.?|enfermero|enfermera|lic\.?\s*enf\.?)\s+/i;
+      while (re.test(s)) s = s.replace(re, '').trim();
+      return s;
+    }
+
+    function formatNurse(rawName) {
+      const base = stripNursePrefix(rawName);
+      return base ? `ENF. ${base}` : '';
+    }
+
+    // Corrector ortográfico local clínico en español
+    const SPELL_MAP = {
+      'dolor de cabesa': 'dolor de cabeza', 'cabesa': 'cabeza', 'cefalia': 'cefalea',
+      'vomito': 'vómito', 'vomitos': 'vómitos', 'nauseas': 'náuseas', 'nausea': 'náusea',
+      'presion': 'presión', 'hipertension': 'hipertensión', 'hipotension': 'hipotensión',
+      'hipotencion': 'hipotensión', 'infeccion': 'infección', 'diagnostico': 'diagnóstico',
+      'diagnosticos': 'diagnósticos', 'medico': 'médico', 'medica': 'médica',
+      'clinica': 'clínica', 'clinico': 'clínico', 'cronico': 'crónico', 'cronica': 'crónica',
+      'toracico': 'torácico', 'torax': 'tórax', 'estomago': 'estómago', 'vertigo': 'vértigo',
+      'migrana': 'migraña', 'alergico': 'alérgico', 'contusion': 'contusión',
+      'laceracion': 'laceración', 'glisemia': 'glucemia', 'glicemia': 'glucemia',
+      'diabetico': 'diabético', 'diabetica': 'diabética', 'embaraso': 'embarazo',
+      'embarasada': 'embarazada', 'cesarea': 'cesárea', 'valoracion': 'valoración',
+      'observacion': 'observación', 'atencion': 'atención', 'revision': 'revisión',
+      'curacion': 'curación', 'inyeccion': 'inyección', 'canalizacion': 'canalización',
+      'medicacion': 'medicación', 'indicacion': 'indicación', 'indicaciones': 'indicaciones',
+      'acompanado': 'acompañado', 'acompanada': 'acompañada', 'acompanante': 'acompañante',
+      'espero': 'esperó', 'atendio': 'atendió', 'retiro': 'retiró', 'traslado': 'trasladó',
+      'anos': 'años', 'ano': 'año', 'dias': 'días', 'dia': 'día', 'tambien': 'también',
+      'despues': 'después', 'sin diagnostico': 'Sin diagnóstico',
+      'dolor abnominal': 'dolor abdominal', 'dolor intestnal': 'dolor intestinal'
+    };
+
+    function titleCaseEs(str) {
+      const small = new Set(['de', 'del', 'la', 'las', 'los', 'y', 'e', 'en', 'el', 'san', 'santa']);
+      return str.split(/\s+/).map((w, i) => {
+        if (!w) return '';
+        if (/^(DR\.|DRA\.|ENF\.)$/i.test(w)) return w.toUpperCase();
+        const l = w.toLowerCase();
+        return i > 0 && small.has(l) ? l : l.charAt(0).toUpperCase() + l.slice(1);
+      }).join(' ');
+    }
+
+    function reviewTextField(field, label, raw) {
+      const original = String(raw || '');
+      if (!original.trim()) return { field, label, original, proposed: original, changed: false, reasons: [] };
+      let next = original.replace(/\s+/g, ' ').trim();
+      const reasons = [];
+      if (next !== original) reasons.push('Espacios normalizados');
+
+      if (field === 'edad') {
+        if (/^\d{1,3}$/.test(next)) {
+          next = `${next} años`;
+          reasons.push('Unidad agregada');
+        } else {
+          next = next.replace(/\banos\b/gi, 'años');
+        }
+      } else if (['nombre', 'procedencia', 'medico', 'enfermera'].includes(field)) {
+        const titled = titleCaseEs(next);
+        if (titled !== next) {
+          next = titled;
+          reasons.push('Mayúsculas en nombre propio');
+        }
+      } else {
+        let fixed = false;
+        for (const wrong of Object.keys(SPELL_MAP).sort((a, b) => b.length - a.length)) {
+          const right = SPELL_MAP[wrong];
+          const re = new RegExp(`(?<![\\p{L}])${wrong.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}])`, 'giu');
+          next = next.replace(re, (m) => {
+            fixed = true;
+            if (m === m.toUpperCase() && m.length > 1) return right.toUpperCase();
+            if (m[0] === m[0].toUpperCase()) return right.charAt(0).toUpperCase() + right.slice(1);
+            return right;
+          });
+        }
+        if (fixed) reasons.push('Ortografía y acentos');
+        const cap = next.charAt(0).toUpperCase() + next.slice(1);
+        if (cap !== next) {
+          next = cap;
+          reasons.push('Mayúscula inicial');
+        }
+      }
+      return { field, label, original, proposed: next, changed: next !== original, reasons };
+    }
+
+    // =========================================================================
+    // 4. DICTADO POR VOZ (Web Speech API es-MX)
+    // =========================================================================
+    function voiceSupported() {
+      return typeof window !== 'undefined' && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
+    }
+
+    function stopVoice() {
+      if (recognition) {
+        try { recognition.stop(); } catch {}
+        recognition = null;
+      }
+      state.activeVoiceKey = null;
+    }
+
+    function toggleVoice(key, onAppend) {
+      if (!voiceSupported()) {
+        showToast('Tu navegador no admite dictado por voz. Usa Chrome o Edge.');
+        return;
+      }
+      if (state.activeVoiceKey === key) {
+        stopVoice();
+        render();
+        return;
+      }
+      stopVoice();
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const rec = new SR();
+      rec.lang = 'es-MX';
+      rec.continuous = false;
+      rec.interimResults = false;
+      recognition = rec;
+      state.activeVoiceKey = key;
+      render();
+
+      rec.onresult = (ev) => {
+        let text = '';
+        for (let i = ev.resultIndex; i < ev.results.length; i++) {
+          if (ev.results[i].isFinal) text += ev.results[i][0].transcript;
+        }
+        const clean = text.trim();
+        if (clean) {
+          onAppend(clean);
+          showToast('Dictado agregado al campo.');
+          render();
+        }
+      };
+      rec.onerror = (ev) => {
+        if (ev.error === 'not-allowed') showToast('Permiso de micrófono denegado.');
+        else if (ev.error !== 'no-speech' && ev.error !== 'aborted') showToast('No se pudo capturar el audio.');
+      };
+      rec.onend = () => {
+        if (state.activeVoiceKey === key) {
+          state.activeVoiceKey = null;
+          recognition = null;
+          render();
+        }
+      };
+      try {
+        rec.start();
+      } catch {
+        state.activeVoiceKey = null;
+        recognition = null;
+        showToast('No se pudo iniciar el micrófono.');
+        render();
+      }
+    }
+
+    // =========================================================================
+    // 5. MENSAJES WHATSAPP E INFORME PDF COMPACTO A4
+    // =========================================================================
+    function buildWhatsAppText(p, type, includeEmpty) {
+      const outcome = getOutcome(p);
+      const lines = [
+        'REGISTRO DE USUARIO',
+        type === 'salida' ? 'TIPO DE REGISTRO: SALIDA' : 'TIPO DE REGISTRO: INGRESO',
+        '--------------------------------'
+      ];
+      const add = (label, val) => {
+        const clean = String(val || '').trim();
+        if (clean) lines.push(`${label}: ${clean}`);
+        else if (includeEmpty) lines.push(`${label}: No registrado`);
+      };
+      add('Hora de entrada', fmt12(p.horaEntrada));
+      if (type === 'salida') {
+        add('Hora de salida', p.horaSalida ? fmt12(p.horaSalida) : 'No registrada');
+        add('Estado de egreso', outcomeLabel(outcome));
+      }
+      add(treatmentLabel(p.tratamiento), p.nombre);
+      add('Edad', p.edad);
+      add('Procedencia', p.procedencia);
+      add('Motivo de visita', p.motivoVisita);
+      if (type === 'ingreso') {
+        add('Observaciones', p.observaciones || 'Sin diagnóstico');
+      } else {
+        add('Médico que lo atendió', p.medico);
+        add('Enfermera que lo atendió', p.enfermera);
+        add('Diagnóstico', p.diagnostico);
+        add('Observaciones de entrada', p.observaciones);
+        add('Observaciones de salida', p.observacionesSalida);
+      }
+      lines.push('--------------------------------');
+      lines.push(`Responsable de guardia: ${DEFAULT_SHIFT_SUPERVISOR}`);
+      return lines.join('\n');
+    }
+
+    function buildShiftSummaryText(list) {
+      const c = computeCounts(list);
+      return [
+        'RESUMEN DE GUARDIA',
+        `Fecha: ${fmtDateEs(new Date())}`,
+        `Responsable de guardia: ${DEFAULT_SHIFT_SUPERVISOR}`,
+        '--------------------------------',
+        `Total de pacientes: ${c.total}`,
+        `Atendidos: ${c.atendidos}`,
+        `No esperó turno: ${c.noEsperoTurno}`,
+        `No atendidos: ${c.noAtendidos}`,
+        `Trasladados a otra unidad: ${c.trasladados}`,
+        `En atención (sin salida): ${c.enAtencion}`
+      ].join('\n');
+    }
+
+    function generateShiftPdf(list) {
+      const jsPDF = window.jspdf?.jsPDF;
+      if (!jsPDF) {
+        showToast('No se cargó jsPDF. Verifica tu conexión a internet.');
+        return;
+      }
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const margin = 10;
+      const w = pageW - margin * 2;
+      const counts = computeCounts(list);
+      const chrono = [...list].sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+      const exited = chrono.filter((p) => hasExit(p));
+      const pending = chrono.filter((p) => !hasExit(p));
+
+      let y = 11;
+      pdf.setFillColor(15, 118, 110);
+      pdf.rect(margin, y - 3, w, 17, 'F');
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(11.5);
+      pdf.text('INFORME DE GUARDIA — REGISTRO DE USUARIOS', margin + 3, y + 2.5);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(8.2);
+      pdf.text(`Fecha: ${fmtDateEs(new Date())}   |   Responsable de guardia: ${DEFAULT_SHIFT_SUPERVISOR}`, margin + 3, y + 9.5);
+      y += 17;
+
+      pdf.setFillColor(241, 245, 249);
+      pdf.setDrawColor(203, 213, 225);
+      pdf.rect(margin, y, w, 11, 'FD');
+      pdf.setTextColor(15, 23, 42);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(7.8);
+      pdf.text(
+        `Total: ${counts.total}  |  Atendidos: ${counts.atendidos}  |  No esperó turno: ${counts.noEsperoTurno}  |  No atendidos: ${counts.noAtendidos}  |  Trasladados: ${counts.trasladados}  |  Sin salida: ${counts.enAtencion}`,
+        margin + 2.5,
+        y + 7
+      );
+      y += 14;
+
+      const ensure = (h) => { if (y + h > pageH - 12) { pdf.addPage(); y = 13; } };
+      const sectionBar = (title, rgb) => {
+        ensure(8);
+        pdf.setFillColor(rgb[0], rgb[1], rgb[2]);
+        pdf.rect(margin, y, w, 5.8, 'F');
+        pdf.setTextColor(255, 255, 255);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(8);
+        pdf.text(title, margin + 2.5, y + 4);
+        y += 7.5;
+      };
+
+      const drawRow = (p, idx) => {
+        const o = getOutcome(p);
+        const l1 = `${idx}. [${outcomeLabel(o).toUpperCase()}] ${p.nombre || 'Sin nombre'} (${p.edad || 'Edad N/R'}) — ${p.procedencia || 'Procedencia N/R'}`;
+        const l2 = `Entrada: ${fmt12(p.horaEntrada)} | Salida: ${p.horaSalida ? fmt12(p.horaSalida) : 'Sin salida'} | Motivo: ${p.motivoVisita || 'N/R'}`;
+        const extras = [];
+        if (p.medico) extras.push(`Médico: ${p.medico}`);
+        if (p.enfermera) extras.push(`Enfermera: ${p.enfermera}`);
+        if (p.diagnostico) extras.push(`Dx: ${p.diagnostico}`);
+        if (p.observaciones) extras.push(`Obs. ingreso: ${p.observaciones}`);
+        if (p.observacionesSalida) extras.push(`Obs. salida: ${p.observacionesSalida}`);
+        const l3 = extras.join(' | ');
+
+        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.8);
+        const s1 = pdf.splitTextToSize(l1, w - 4);
+        pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.3);
+        const s2 = pdf.splitTextToSize(l2, w - 4);
+        const s3 = l3 ? pdf.splitTextToSize(l3, w - 4) : [];
+        const boxH = 2.6 + s1.length * 3.3 + s2.length * 3.1 + s3.length * 3.1 + 1.8;
+
+        ensure(boxH + 1.8);
+        pdf.setDrawColor(226, 232, 240);
+        const fills = {
+          atendido: [240, 253, 244],
+          no_espero_turno: [255, 247, 237],
+          no_atendido: [254, 242, 242],
+          trasladado: [239, 246, 255],
+          en_atencion: [254, 252, 232]
+        };
+        const f = fills[o] || [248, 250, 252];
+        pdf.setFillColor(f[0], f[1], f[2]);
+        pdf.rect(margin, y, w, boxH, 'FD');
+
+        let ty = y + 3.6;
+        pdf.setTextColor(15, 23, 42); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.8);
+        pdf.text(s1, margin + 2, ty); ty += s1.length * 3.3;
+        pdf.setTextColor(51, 65, 85); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.3);
+        pdf.text(s2, margin + 2, ty); ty += s2.length * 3.1;
+        if (s3.length) { pdf.setTextColor(30, 41, 59); pdf.text(s3, margin + 2, ty); }
+        y += boxH + 1.6;
+      };
+
+      if (list.length === 0) {
+        pdf.setTextColor(71, 85, 105); pdf.setFontSize(9);
+        pdf.text('No hay pacientes registrados en este turno.', margin, y + 5);
+      } else {
+        if (exited.length) {
+          sectionBar(`PACIENTES CON SALIDA REGISTRADA (${exited.length}) — ORDEN CRONOLÓGICO`, [15, 118, 110]);
+          exited.forEach((p, i) => drawRow(p, i + 1));
+        }
+        if (pending.length) {
+          sectionBar(`PACIENTES SIN SALIDA / EN ATENCIÓN (${pending.length})`, [180, 83, 9]);
+          pending.forEach((p, i) => drawRow(p, exited.length + i + 1));
+        }
+      }
+
+      const d = new Date();
+      const fname = `Informe_Guardia_${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}.pdf`;
+      pdf.save(fname);
+      showToast(`Informe descargado: ${fname}`);
+    }
+
+    function exportBackupJson(list) {
+      const payload = {
+        app: 'ACE-MED',
+        schemaVersion: 2,
+        exportedAt: new Date().toISOString(),
+        exportedBy: state.user?.email || DEFAULT_SHIFT_SUPERVISOR,
+        responsableGuardia: DEFAULT_SHIFT_SUPERVISOR,
+        patients: list
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const d = new Date();
+      a.href = url;
+      a.download = `ACE-MED-respaldo-${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      showToast('Respaldo JSON descargado.');
+    }
+
+    // =========================================================================
+    // 6. SERVICIO FIRESTORE (ALINEADO 100% A firestore.rules)
+    // =========================================================================
+    function isBootAdmin(u) {
+      return Boolean(u && u.email && u.email.toLowerCase() === ADMIN_EMAIL && u.emailVerified);
+    }
+
+    function isPrimaryAdmin() {
+      return isBootAdmin(state.user);
+    }
+
+    function isAdmin() {
+      return isBootAdmin(state.user) || Boolean(state.profile?.role === 'admin' && state.profile?.approved);
+    }
+
+    function isAuthorized() {
+      return isBootAdmin(state.user) || Boolean(state.profile?.approved);
+    }
+
+    function mapPatientDoc(id, d) {
+      const horaSalida = typeof d.horaSalida === 'string' ? d.horaSalida : '';
+      const createdAt = typeof d.createdAtIso === 'string' && d.createdAtIso ? d.createdAtIso : new Date().toISOString();
+      const updatedAt = typeof d.updatedAtIso === 'string' && d.updatedAtIso ? d.updatedAtIso : createdAt;
+      return {
+        id,
+        workspaceId: d.workspaceId || WORKSPACE_ID,
+        createdAt,
+        updatedAt,
+        horaEntrada: typeof d.horaEntrada === 'string' ? d.horaEntrada : '',
+        horaSalida,
+        estadoEgreso: ['en_atencion', 'atendido', 'no_espero_turno', 'no_atendido', 'trasladado'].includes(d.estadoEgreso)
+          ? d.estadoEgreso : (horaSalida ? 'atendido' : 'en_atencion'),
+        tratamiento: ['paciente', 'usuario', 'usuaria'].includes(d.tratamiento) ? d.tratamiento : 'paciente',
+        nombre: typeof d.nombre === 'string' ? d.nombre : '',
+        edad: typeof d.edad === 'string' ? d.edad : '',
+        procedencia: typeof d.procedencia === 'string' ? d.procedencia : '',
+        motivoVisita: typeof d.motivoVisita === 'string' ? d.motivoVisita : '',
+        observaciones: typeof d.observaciones === 'string' ? d.observaciones : '',
+        observacionesSalida: typeof d.observacionesSalida === 'string' ? d.observacionesSalida : '',
+        medico: typeof d.medico === 'string' ? d.medico : '',
+        enfermera: typeof d.enfermera === 'string' ? d.enfermera : '',
+        diagnostico: typeof d.diagnostico === 'string' ? d.diagnostico : '',
+        version: typeof d.version === 'number' && d.version >= 1 ? d.version : 1,
+        createdByEmail: typeof d.createdByEmail === 'string' ? d.createdByEmail : '',
+        updatedByEmail: typeof d.updatedByEmail === 'string' ? d.updatedByEmail : ''
+      };
+    }
+
+    async function ensureUserProfile(user) {
+      const path = `users/${user.uid}`;
+      const ref = doc(db, 'users', user.uid);
+      const boot = isBootAdmin(user);
+      try {
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+          const data = snap.data();
+          const displayName = clamp(user.displayName || data.displayName || user.email || '', 150);
+          if (displayName && displayName !== data.displayName) {
+            await updateDoc(ref, { displayName, updatedAt: serverTimestamp() });
+          }
+          return {
+            uid: user.uid,
+            email: String(data.email || user.email || ''),
+            displayName: displayName || String(data.email || ''),
+            role: data.role === 'admin' || boot ? 'admin' : 'staff',
+            approved: Boolean(data.approved) || boot
+          };
+        }
+        const payload = {
+          uid: user.uid,
+          email: clamp(user.email || '', 200),
+          displayName: clamp(user.displayName || user.email || 'Personal clínico', 150),
+          role: boot ? 'admin' : 'staff',
+          approved: boot,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        };
+        await setDoc(ref, payload);
+        return { uid: user.uid, email: payload.email, displayName: payload.displayName, role: payload.role, approved: payload.approved };
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, path);
+      }
+    }
+
+    async function writeAuditLog(action, summary, affectedCount, patientId = '') {
+      if (!state.user) return;
+      const logId = safeId('log');
+      const path = `audit_logs/${logId}`;
+      try {
+        await setDoc(doc(db, 'audit_logs', logId), {
+          id: logId,
+          workspaceId: WORKSPACE_ID,
+          action,
+          actorUid: state.user.uid,
+          actorEmail: clamp(state.user.email || '', 200),
+          actorName: clamp(state.user.displayName || state.user.email || 'Personal', 150),
+          summary: clamp(summary || action, 500) || action,
+          affectedCount: Math.max(0, Math.min(10000, Math.floor(affectedCount || 0))),
+          patientId: clamp(patientId, 128),
+          createdAt: serverTimestamp(),
+          createdAtIso: new Date().toISOString()
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, path);
+      }
+    }
+
+    async function createPatientCloud(form) {
+      const u = state.user;
+      const id = safeId('pac');
+      const path = `patients/${id}`;
+      const nowIso = new Date().toISOString();
+      const horaSalida = clamp(form.horaSalida, 10);
+      const estado = ['atendido', 'no_espero_turno', 'no_atendido', 'trasladado'].includes(form.estadoEgreso)
+        ? form.estadoEgreso : (horaSalida ? 'atendido' : 'en_atencion');
+      try {
+        await setDoc(doc(db, 'patients', id), {
+          id,
+          workspaceId: WORKSPACE_ID,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          createdAtIso: nowIso,
+          updatedAtIso: nowIso,
+          createdByUid: u.uid,
+          createdByEmail: clamp(u.email || '', 200),
+          updatedByUid: u.uid,
+          updatedByEmail: clamp(u.email || '', 200),
+          version: 1,
+          horaEntrada: clamp(form.horaEntrada, 10),
+          horaSalida,
+          estadoEgreso: estado,
+          tratamiento: ['paciente', 'usuario', 'usuaria'].includes(form.tratamiento) ? form.tratamiento : 'paciente',
+          nombre: clamp(form.nombre, 200),
+          edad: clamp(form.edad, 60),
+          procedencia: clamp(form.procedencia, 200),
+          motivoVisita: clamp(form.motivoVisita, 1000),
+          observaciones: clamp(form.observaciones, 1500),
+          observacionesSalida: clamp(form.observacionesSalida, 1500),
+          medico: clamp(form.medico, 200),
+          enfermera: clamp(form.enfermera, 200),
+          diagnostico: clamp(form.diagnostico, 1500)
+        });
+        await writeAuditLog('create_patient', `Registró ingreso de ${clamp(form.nombre, 120) || 'paciente'}`, 1, id);
+        return id;
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, path);
+      }
+    }
+
+    async function updatePatientCloud(existing, form) {
+      const u = state.user;
+      const path = `patients/${existing.id}`;
+      const ref = doc(db, 'patients', existing.id);
+      const nowIso = new Date().toISOString();
+      const horaSalida = clamp(form.horaSalida, 10);
+      const estado = ['atendido', 'no_espero_turno', 'no_atendido', 'trasladado'].includes(form.estadoEgreso)
+        ? form.estadoEgreso : (horaSalida ? 'atendido' : 'en_atencion');
+      try {
+        await runTransaction(db, async (tx) => {
+          const snap = await tx.get(ref);
+          if (!snap.exists()) throw new Error('CONFLICT:Este registro fue eliminado desde otro dispositivo.');
+          const cur = snap.data();
+          if ((cur.version || 1) !== existing.version) {
+            throw new Error('CONFLICT:Otro dispositivo actualizó este paciente mientras editabas. Revisa los datos más recientes antes de guardar.');
+          }
+          tx.update(ref, {
+            horaEntrada: clamp(form.horaEntrada, 10),
+            horaSalida,
+            estadoEgreso: estado,
+            tratamiento: ['paciente', 'usuario', 'usuaria'].includes(form.tratamiento) ? form.tratamiento : 'paciente',
+            nombre: clamp(form.nombre, 200),
+            edad: clamp(form.edad, 60),
+            procedencia: clamp(form.procedencia, 200),
+            motivoVisita: clamp(form.motivoVisita, 1000),
+            observaciones: clamp(form.observaciones, 1500),
+            observacionesSalida: clamp(form.observacionesSalida, 1500),
+            medico: clamp(form.medico, 200),
+            enfermera: clamp(form.enfermera, 200),
+            diagnostico: clamp(form.diagnostico, 1500),
+            updatedAt: serverTimestamp(),
+            updatedAtIso: nowIso,
+            updatedByUid: u.uid,
+            updatedByEmail: clamp(u.email || '', 200),
+            version: existing.version + 1
+          });
+        });
+        await writeAuditLog('update_patient', `Actualizó datos de ${clamp(form.nombre, 120) || 'paciente'}`, 1, existing.id);
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith('CONFLICT:')) throw err;
+        handleFirestoreError(err, OperationType.UPDATE, path);
+      }
+    }
+
+    async function registerDischargeCloud(existing, updates) {
+      const u = state.user;
+      const path = `patients/${existing.id}`;
+      const ref = doc(db, 'patients', existing.id);
+      const nowIso = new Date().toISOString();
+      try {
+        await runTransaction(db, async (tx) => {
+          const snap = await tx.get(ref);
+          if (!snap.exists()) throw new Error('CONFLICT:Este paciente fue eliminado desde otro dispositivo.');
+          const cur = snap.data();
+          if ((cur.version || 1) !== existing.version) {
+            throw new Error('CONFLICT:Otro dispositivo actualizó este paciente mientras registrabas la salida. Vuelve a abrir el registro.');
+          }
+          tx.update(ref, {
+            horaSalida: clamp(updates.horaSalida, 10),
+            estadoEgreso: updates.estadoEgreso,
+            observacionesSalida: clamp(updates.observacionesSalida, 1500),
+            medico: clamp(updates.medico, 200),
+            enfermera: clamp(updates.enfermera, 200),
+            diagnostico: clamp(updates.diagnostico, 1500),
+            updatedAt: serverTimestamp(),
+            updatedAtIso: nowIso,
+            updatedByUid: u.uid,
+            updatedByEmail: clamp(u.email || '', 200),
+            version: existing.version + 1
+          });
+        });
+        await writeAuditLog(
+          'register_discharge',
+          `Registró salida (${outcomeLabel(updates.estadoEgreso)}) de ${existing.nombre || 'paciente'}`,
+          1,
+          existing.id
+        );
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith('CONFLICT:')) throw err;
+        handleFirestoreError(err, OperationType.UPDATE, path);
+      }
+    }
+
+    async function deleteSinglePatientCloud(p) {
+      const path = `patients/${p.id}`;
+      try {
+        await deleteDoc(doc(db, 'patients', p.id));
+        await writeAuditLog('delete_patient', `Eliminó registro de ${p.nombre || 'paciente'}`, 1, p.id);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, path);
+      }
+    }
+
+    async function deleteAllPatientsCloud(list) {
+      if (!isAdmin()) throw new Error('Solo la cuenta administradora puede eliminar todos los registros.');
+      const total = list.length;
+      try {
+        for (let i = 0; i < list.length; i += 400) {
+          const chunk = list.slice(i, i + 400);
+          const batch = writeBatch(db);
+          for (const p of chunk) batch.delete(doc(db, 'patients', p.id));
+          await batch.commit();
+        }
+        await writeAuditLog(
+          'delete_all_patients',
+          `Eliminación total autorizada por administrador (${total} registros)`,
+          total,
+          ''
+        );
+        return total;
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, 'patients');
+      }
+    }
+
+    async function saveShiftConfigCloud(updates) {
+      const u = state.user;
+      const path = 'shift_config/current';
+      const ref = doc(db, 'shift_config', 'current');
+      try {
+        const snap = await getDoc(ref);
+        const nextUrl = clamp(updates.whatsappGroupUrl ?? state.shiftConfig.whatsappGroupUrl, 300) || DEFAULT_WHATSAPP_GROUP_URL;
+        const nextEmpty = Boolean(updates.incluirCamposVaciosEnMensaje ?? state.shiftConfig.incluirCamposVaciosEnMensaje);
+        if (!snap.exists()) {
+          await setDoc(ref, {
+            workspaceId: WORKSPACE_ID,
+            responsableGuardia: DEFAULT_SHIFT_SUPERVISOR,
+            whatsappGroupUrl: nextUrl,
+            incluirCamposVaciosEnMensaje: nextEmpty,
+            updatedAt: serverTimestamp(),
+            updatedByUid: u.uid,
+            updatedByEmail: clamp(u.email || '', 200)
+          });
+        } else {
+          await updateDoc(ref, {
+            whatsappGroupUrl: nextUrl,
+            incluirCamposVaciosEnMensaje: nextEmpty,
+            updatedAt: serverTimestamp(),
+            updatedByUid: u.uid,
+            updatedByEmail: clamp(u.email || '', 200)
+          });
+        }
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, path);
+      }
+    }
+
+    async function importBatchToCloud(rawRecords, actionType) {
+      const u = state.user;
+      const existingIds = new Set(state.patients.map((p) => p.id));
+      let imported = 0;
+      let skipped = 0;
+      const toInsert = [];
+      for (const item of rawRecords) {
+        if (!item || typeof item !== 'object') continue;
+        const id = safeId('pac', item.id);
+        if (existingIds.has(id)) { skipped++; continue; }
+        existingIds.add(id);
+        const nowIso = new Date().toISOString();
+        const hs = clamp(item.horaSalida || '', 10);
+        const st = ['atendido', 'no_espero_turno', 'no_atendido', 'trasladado'].includes(item.estadoEgreso)
+          ? item.estadoEgreso : (hs ? 'atendido' : 'en_atencion');
+        toInsert.push({
+          id,
+          payload: {
+            id,
+            workspaceId: WORKSPACE_ID,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+            createdAtIso: clamp(item.createdAt || nowIso, 40) || nowIso,
+            updatedAtIso: nowIso,
+            createdByUid: u.uid,
+            createdByEmail: clamp(u.email || '', 200),
+            updatedByUid: u.uid,
+            updatedByEmail: clamp(u.email || '', 200),
+            version: 1,
+            horaEntrada: clamp(item.horaEntrada || '', 10),
+            horaSalida: hs,
+            estadoEgreso: st,
+            tratamiento: ['paciente', 'usuario', 'usuaria'].includes(item.tratamiento) ? item.tratamiento : 'paciente',
+            nombre: clamp(item.nombre || '', 200),
+            edad: clamp(item.edad || '', 60),
+            procedencia: clamp(item.procedencia || '', 200),
+            motivoVisita: clamp(item.motivoVisita || '', 1000),
+            observaciones: clamp(item.observaciones || '', 1500),
+            observacionesSalida: clamp(item.observacionesSalida || '', 1500),
+            medico: clamp(item.medico || '', 200),
+            enfermera: clamp(item.enfermera || '', 200),
+            diagnostico: clamp(item.diagnostico || '', 1500)
+          }
+        });
+      }
+      try {
+        for (let i = 0; i < toInsert.length; i += 400) {
+          const batch = writeBatch(db);
+          for (const row of toInsert.slice(i, i + 400)) {
+            batch.set(doc(db, 'patients', row.id), row.payload);
+            imported++;
+          }
+          await batch.commit();
+        }
+        if (imported > 0) {
+          await writeAuditLog(
+            actionType,
+            actionType === 'migrate_local'
+              ? `Migró ${imported} registros locales a la nube`
+              : `Restauró ${imported} registros desde respaldo JSON`,
+            imported,
+            ''
+          );
+        }
+        return { imported, skipped };
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, 'patients');
+      }
+    }
+
+    async function updateStaffAccessCloud(target, approved, role) {
+      if (!isPrimaryAdmin()) throw new Error('Solo el administrador principal puede gestionar accesos.');
+      const path = `users/${target.uid}`;
+      try {
+        await updateDoc(doc(db, 'users', target.uid), {
+          approved,
+          role,
+          updatedAt: serverTimestamp()
+        });
+        const roleLabel = role === 'admin' ? 'Administrador' : 'Personal';
+        const action = approved ? 'update_staff' : 'revoke_staff_access';
+        const summary = approved
+          ? (target.approved ? `Cambió el rol de ${target.email} a ${roleLabel}` : `Autorizó acceso a ${target.email} (${roleLabel})`)
+          : `Revocó el acceso de ${target.email}`;
+        await writeAuditLog(action, summary, 1, '');
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, path);
+      }
+    }
+
+    function formatFirestoreQueryError(err, fallback) {
+      if (err && typeof err === 'object') {
+        const code = typeof err.code === 'string' ? err.code.trim() : '';
+        const msg = typeof err.message === 'string' ? err.message.trim() : '';
+        if (code && msg) return msg.includes(code) ? msg : `[${code}] ${msg}`;
+        if (msg) return msg;
+        if (code) return `[${code}] ${fallback}`;
+      }
+      if (typeof err === 'string' && err.trim()) return err.trim();
+      return fallback;
+    }
+
+    function extractAccessRequestIso(d) {
+      for (const candidate of [d.requestedAt, d.requestedAtIso]) {
+        if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+        if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+          const dt = new Date(candidate);
+          if (!Number.isNaN(dt.getTime())) return dt.toISOString();
+        }
+        if (candidate && typeof candidate === 'object' && typeof candidate.toDate === 'function') {
+          const dt = candidate.toDate();
+          if (!Number.isNaN(dt.getTime())) return dt.toISOString();
+        }
+        if (candidate && typeof candidate === 'object') {
+          const rawSeconds = typeof candidate.seconds === 'number'
+            ? candidate.seconds
+            : (typeof candidate._seconds === 'number' ? candidate._seconds : null);
+          if (rawSeconds !== null) {
+            const dt = new Date(rawSeconds * 1000);
+            if (!Number.isNaN(dt.getTime())) return dt.toISOString();
+          }
+        }
+      }
+      return '';
+    }
+
+    function parseAccessRequestStatus(raw) {
+      if (raw === 'pendiente' || raw === 'aprobada' || raw === 'rechazada') return raw;
+      return null;
+    }
+
+    function mapAccessRequestDoc(docId, d) {
+      const status = parseAccessRequestStatus(d.status);
+      if (!status) return null;
+      const assignedRole = d.assignedRole === 'admin' || d.assignedRole === 'staff' ? d.assignedRole : '';
+      const uid = typeof d.uid === 'string' && d.uid.trim() ? d.uid.trim() : docId;
+      return {
+        uid,
+        email: typeof d.email === 'string' ? d.email : '',
+        displayName: typeof d.displayName === 'string' ? d.displayName : '',
+        status,
+        requestedAtIso: extractAccessRequestIso(d),
+        reviewedByUid: String(d.reviewedByUid || ''),
+        reviewedByEmail: String(d.reviewedByEmail || ''),
+        reviewedAtIso: String(d.reviewedAtIso || ''),
+        assignedRole
+      };
+    }
+
+    let accessSyncEpoch = 0;
+
+    async function fetchPendingAccessRequestsFromServer() {
+      const q = query(collection(db, 'access_requests'), where('status', '==', 'pendiente'));
+      try {
+        const snap = await getDocsFromServer(q);
+        return snap.docs
+          .map((d) => mapAccessRequestDoc(d.id, d.data()))
+          .filter((item) => item !== null && item.status === 'pendiente')
+          .sort((a, b) => b.requestedAtIso.localeCompare(a.requestedAtIso));
+      } catch (err) {
+        const readable = formatFirestoreQueryError(err, 'Error al consultar las solicitudes de acceso en Firestore.');
+        try { handleFirestoreError(err, OperationType.LIST, 'access_requests'); } catch {}
+        throw new Error(readable);
+      }
+    }
+
+    async function refreshAccessRequestsFromServer() {
+      if (!isPrimaryAdmin()) return;
+      const epoch = ++accessSyncEpoch;
+      state.accessRequestsLoading = true;
+      state.accessRequestsError = '';
+      render();
+      try {
+        const list = await fetchPendingAccessRequestsFromServer();
+        if (epoch !== accessSyncEpoch) return;
+        state.accessRequests = list;
+        state.accessRequestsError = '';
+      } catch (err) {
+        if (epoch !== accessSyncEpoch) return;
+        state.accessRequestsError = err instanceof Error ? err.message : 'Error al consultar las solicitudes de acceso en Firestore.';
+      } finally {
+        if (epoch === accessSyncEpoch) {
+          state.accessRequestsLoading = false;
+          render();
+        }
+      }
+    }
+
+    async function submitAccessRequestCloud() {
+      const user = state.user;
+      if (!user || !user.email || !user.emailVerified) {
+        throw new Error('Se requiere una cuenta de Google verificada para solicitar acceso.');
+      }
+      const path = `access_requests/${user.uid}`;
+      const ref = doc(db, 'access_requests', user.uid);
+      const nowIso = new Date().toISOString();
+      const displayName = clamp(user.displayName || user.email || 'Usuario', 150);
+      try {
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+          if (parseAccessRequestStatus(snap.data().status) === 'pendiente') {
+            throw new Error('Ya tienes una solicitud de acceso pendiente de revisión.');
+          }
+          await updateDoc(ref, {
+            displayName,
+            status: 'pendiente',
+            requestedAt: serverTimestamp(),
+            requestedAtIso: nowIso,
+            updatedAt: serverTimestamp(),
+            reviewedByUid: '',
+            reviewedByEmail: '',
+            reviewedAtIso: '',
+            assignedRole: ''
+          });
+          return;
+        }
+        await setDoc(ref, {
+          uid: user.uid,
+          email: clamp(user.email, 200),
+          displayName,
+          status: 'pendiente',
+          requestedAt: serverTimestamp(),
+          requestedAtIso: nowIso,
+          updatedAt: serverTimestamp(),
+          reviewedByUid: '',
+          reviewedByEmail: '',
+          reviewedAtIso: '',
+          assignedRole: ''
+        });
+      } catch (err) {
+        if (err instanceof Error && err.message.includes('solicitud de acceso pendiente')) throw err;
+        handleFirestoreError(err, OperationType.WRITE, path);
+      }
+    }
+
+    async function approveAccessRequestCloud(req, role) {
+      if (!isPrimaryAdmin() || !state.user) throw new Error('Solo el administrador principal puede aprobar solicitudes.');
+      const path = `access_requests/${req.uid}`;
+      const nowIso = new Date().toISOString();
+      const safeName = clamp(req.displayName || req.email || 'Personal clínico', 150);
+      const safeEmail = clamp(req.email, 200);
+      const roleLabel = role === 'admin' ? 'Administrador' : 'Personal';
+      try {
+        const userRef = doc(db, 'users', req.uid);
+        const reqRef = doc(db, 'access_requests', req.uid);
+        const logId = safeId('log');
+        const logRef = doc(db, 'audit_logs', logId);
+        const userSnap = await getDoc(userRef);
+        const batch = writeBatch(db);
+        if (userSnap.exists()) {
+          batch.update(userRef, { role, approved: true, displayName: safeName, updatedAt: serverTimestamp() });
+        } else {
+          batch.set(userRef, {
+            uid: req.uid,
+            email: safeEmail,
+            displayName: safeName,
+            role,
+            approved: true,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          });
+        }
+        batch.update(reqRef, {
+          status: 'aprobada',
+          assignedRole: role,
+          reviewedByUid: state.user.uid,
+          reviewedByEmail: clamp(state.user.email || '', 200),
+          reviewedAtIso: nowIso,
+          updatedAt: serverTimestamp()
+        });
+        batch.set(logRef, {
+          id: logId,
+          workspaceId: WORKSPACE_ID,
+          action: 'approve_access_request',
+          actorUid: state.user.uid,
+          actorEmail: clamp(state.user.email || '', 200),
+          actorName: clamp(state.user.displayName || state.user.email || 'Administrador', 150),
+          summary: clamp(`Aprobó la solicitud de acceso de ${safeEmail} con rol ${roleLabel}`, 500),
+          affectedCount: 1,
+          patientId: '',
+          createdAt: serverTimestamp(),
+          createdAtIso: nowIso
+        });
+        await batch.commit();
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, path);
+      }
+    }
+
+    async function rejectAccessRequestCloud(req) {
+      if (!isPrimaryAdmin() || !state.user) throw new Error('Solo el administrador principal puede rechazar solicitudes.');
+      const path = `access_requests/${req.uid}`;
+      const nowIso = new Date().toISOString();
+      const safeEmail = clamp(req.email, 200);
+      try {
+        const reqRef = doc(db, 'access_requests', req.uid);
+        const logId = safeId('log');
+        const logRef = doc(db, 'audit_logs', logId);
+        const batch = writeBatch(db);
+        batch.update(reqRef, {
+          status: 'rechazada',
+          assignedRole: '',
+          reviewedByUid: state.user.uid,
+          reviewedByEmail: clamp(state.user.email || '', 200),
+          reviewedAtIso: nowIso,
+          updatedAt: serverTimestamp()
+        });
+        batch.set(logRef, {
+          id: logId,
+          workspaceId: WORKSPACE_ID,
+          action: 'reject_access_request',
+          actorUid: state.user.uid,
+          actorEmail: clamp(state.user.email || '', 200),
+          actorName: clamp(state.user.displayName || state.user.email || 'Administrador', 150),
+          summary: clamp(`Rechazó la solicitud de acceso de ${safeEmail}`, 500),
+          affectedCount: 1,
+          patientId: '',
+          createdAt: serverTimestamp(),
+          createdAtIso: nowIso
+        });
+        await batch.commit();
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, path);
+      }
+    }
+
+    // =========================================================================
+    // 7. SUSCRIPCIONES EN TIEMPO REAL Y CICLO DE AUTENTICACIÓN
+    // =========================================================================
+    function clearSubscriptions() {
+      for (const fn of state.unsubs) { try { fn(); } catch {} }
+      state.unsubs = [];
+    }
+
+    function startDataSubscriptions() {
+      clearSubscriptions();
+      if (!state.user || !isAuthorized()) return;
+
+      const uPatients = onSnapshot(
+        query(collection(db, 'patients'), where('workspaceId', '==', WORKSPACE_ID)),
+        { includeMetadataChanges: true },
+        (snap) => {
+          state.patients = snap.docs
+            .map((d) => mapPatientDoc(d.id, d.data()))
+            .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+          state.fromCache = snap.metadata.fromCache;
+          state.patientsLoaded = true;
+          void maybeMigrateLegacyLocal();
+          render();
+        },
+        (err) => {
+          state.runtimeError = 'Error al sincronizar pacientes con Firestore.';
+          render();
+          handleFirestoreError(err, OperationType.LIST, 'patients');
+        }
+      );
+
+      const uConfig = onSnapshot(
+        doc(db, 'shift_config', 'current'),
+        (snap) => {
+          if (snap.exists()) {
+            const d = snap.data();
+            state.shiftConfig = {
+              workspaceId: WORKSPACE_ID,
+              responsableGuardia: DEFAULT_SHIFT_SUPERVISOR,
+              whatsappGroupUrl: typeof d.whatsappGroupUrl === 'string' && d.whatsappGroupUrl ? d.whatsappGroupUrl : DEFAULT_WHATSAPP_GROUP_URL,
+              incluirCamposVaciosEnMensaje: Boolean(d.incluirCamposVaciosEnMensaje)
+            };
+            render();
+          }
+        },
+        (err) => handleFirestoreError(err, OperationType.GET, 'shift_config/current')
+      );
+
+      const uLogs = onSnapshot(
+        query(collection(db, 'audit_logs'), where('workspaceId', '==', WORKSPACE_ID)),
+        (snap) => {
+          state.auditLogs = snap.docs
+            .map((d) => d.data())
+            .sort((a, b) => String(b.createdAtIso || '').localeCompare(String(a.createdAtIso || '')))
+            .slice(0, 80);
+          render();
+        },
+        (err) => handleFirestoreError(err, OperationType.LIST, 'audit_logs')
+      );
+
+      state.unsubs.push(uPatients, uConfig, uLogs);
+
+      if (isPrimaryAdmin()) {
+        const epoch = ++accessSyncEpoch;
+        state.staffUsersError = '';
+        state.accessRequestsError = '';
+        state.accessRequestsLoading = true;
+        const uStaff = onSnapshot(
+          query(collection(db, 'users'), where('approved', '==', true)),
+          (snap) => {
+            state.staffUsersError = '';
+            state.staffUsers = snap.docs
+              .map((d) => {
+                const x = d.data();
+                return {
+                  uid: typeof x.uid === 'string' && x.uid.trim() ? x.uid.trim() : d.id,
+                  email: String(x.email || ''),
+                  displayName: String(x.displayName || ''),
+                  role: x.role === 'admin' ? 'admin' : 'staff',
+                  approved: Boolean(x.approved)
+                };
+              })
+              .sort((a, b) => (a.role !== b.role ? (a.role === 'admin' ? -1 : 1) : a.email.localeCompare(b.email)));
+            render();
+          },
+          (err) => {
+            state.staffUsersError = formatFirestoreQueryError(err, 'Error al consultar el personal autorizado.');
+            render();
+            try { handleFirestoreError(err, OperationType.LIST, 'users'); } catch {}
+          }
+        );
+        const uRequests = onSnapshot(
+          query(collection(db, 'access_requests'), where('status', '==', 'pendiente')),
+          (snap) => {
+            const list = snap.docs
+              .map((d) => mapAccessRequestDoc(d.id, d.data()))
+              .filter((item) => item !== null && item.status === 'pendiente')
+              .sort((a, b) => b.requestedAtIso.localeCompare(a.requestedAtIso));
+            state.accessRequestsError = '';
+            state.accessRequests = list;
+            if (!snap.metadata.fromCache || list.length > 0) {
+              state.accessRequestsLoading = false;
+            }
+            render();
+          },
+          (err) => {
+            state.accessRequestsError = formatFirestoreQueryError(err, 'Error al consultar las solicitudes de acceso en Firestore.');
+            state.accessRequestsLoading = false;
+            render();
+            try { handleFirestoreError(err, OperationType.LIST, 'access_requests'); } catch {}
+          }
+        );
+        state.unsubs.push(uStaff, uRequests);
+        fetchPendingAccessRequestsFromServer()
+          .then((list) => {
+            if (epoch !== accessSyncEpoch) return;
+            state.accessRequests = list;
+            state.accessRequestsError = '';
+            state.accessRequestsLoading = false;
+            render();
+          })
+          .catch((err) => {
+            if (epoch !== accessSyncEpoch) return;
+            state.accessRequestsError = err instanceof Error ? err.message : 'Error al consultar las solicitudes de acceso en Firestore.';
+            state.accessRequestsLoading = false;
+            render();
+          });
+      } else {
+        accessSyncEpoch++;
+        state.accessRequests = [];
+        state.accessRequestsLoading = false;
+        state.accessRequestsError = '';
+      }
+    }
+
+    async function maybeMigrateLegacyLocal() {
+      if (state.migrationAttempted || !state.patientsLoaded || !isAuthorized()) return;
+      state.migrationAttempted = true;
+      try {
+        if (localStorage.getItem(MIGRATION_DONE_KEY) === '1') return;
+        const raw = localStorage.getItem(LEGACY_LOCAL_KEY);
+        if (!raw) { localStorage.setItem(MIGRATION_DONE_KEY, '1'); return; }
+        const parsed = JSON.parse(raw);
+        const list = Array.isArray(parsed?.patients) ? parsed.patients : [];
+        if (list.length > 0) {
+          const { imported } = await importBatchToCloud(list, 'migrate_local');
+          if (imported > 0) showToast(`Se migraron ${imported} registros previos a la base compartida.`);
+        }
+        localStorage.setItem(MIGRATION_DONE_KEY, '1');
+      } catch {
+        // Conserva datos locales sin interrumpir
+      }
+    }
+
+    onAuthStateChanged(auth, async (user) => {
+      clearSubscriptions();
+      state.user = user;
+      state.authReady = true;
+      state.authError = '';
+      if (!user) {
+        state.profile = null;
+        state.patients = [];
+        state.patientsLoaded = false;
+        state.auditLogs = [];
+        accessSyncEpoch++;
+        state.staffUsers = [];
+        state.staffUsersError = '';
+        state.accessRequests = [];
+        state.accessRequestsLoading = false;
+        state.accessRequestsError = '';
+        state.ownAccessRequest = null;
+        state.requestFeedback = null;
+        state.migrationAttempted = false;
+        render();
+        return;
+      }
+
+      state.profileLoading = true;
+      render();
+      try {
+        state.profile = await ensureUserProfile(user);
+        state.profileLoading = false;
+        let unsubOwnReq = null;
+        const syncOwnReqListener = () => {
+          if (isAuthorized()) {
+            if (unsubOwnReq) { try { unsubOwnReq(); } catch {} unsubOwnReq = null; }
+            state.ownAccessRequest = null;
+          } else if (!unsubOwnReq) {
+            unsubOwnReq = onSnapshot(doc(db, 'access_requests', user.uid), (snap) => {
+              state.ownAccessRequest = snap.exists() ? mapAccessRequestDoc(snap.id, snap.data()) : null;
+              render();
+            });
+            state.unsubs.push(() => { if (unsubOwnReq) { try { unsubOwnReq(); } catch {} unsubOwnReq = null; } });
+          }
+        };
+        const unsubOwn = onSnapshot(doc(db, 'users', user.uid), (snap) => {
+          if (snap.exists()) {
+            const d = snap.data();
+            const wasAuth = isAuthorized();
+            state.profile = {
+              uid: user.uid,
+              email: String(d.email || user.email || ''),
+              displayName: String(d.displayName || ''),
+              role: d.role === 'admin' ? 'admin' : 'staff',
+              approved: Boolean(d.approved)
+            };
+            if (!wasAuth && isAuthorized()) {
+              startDataSubscriptions();
+            } else if (wasAuth && !isAuthorized()) {
+              clearSubscriptions();
+              state.patients = [];
+              state.patientsLoaded = false;
+              state.auditLogs = [];
+              accessSyncEpoch++;
+              state.staffUsers = [];
+              state.staffUsersError = '';
+              state.accessRequests = [];
+              state.accessRequestsLoading = false;
+              state.accessRequestsError = '';
+              state.unsubs.push(unsubOwn);
+            }
+            syncOwnReqListener();
+            render();
+          }
+        });
+        state.unsubs.push(unsubOwn);
+        if (isAuthorized()) startDataSubscriptions();
+        syncOwnReqListener();
+      } catch {
+        state.profileLoading = false;
+        state.authError = 'No se pudo inicializar tu perfil en Firestore. Intenta recargar.';
+      }
+      render();
+    });
+
+    // =========================================================================
+    // 8. INICIALIZADORES DE FORMULARIOS Y HELPERS DE VISTA
+    // =========================================================================
+    function createEmptyIntakeForm() {
+      return {
+        horaEntrada: nowTime24(),
+        horaSalida: '',
+        estadoEgreso: 'en_atencion',
+        tratamiento: 'paciente',
+        nombre: '',
+        edad: '',
+        procedencia: '',
+        motivoVisita: '',
+        observaciones: '',
+        observacionesSalida: '',
+        medico: '',
+        enfermera: '',
+        diagnostico: ''
+      };
+    }
+
+    function openNewIntakeForm() {
+      stopVoice();
+      state.editingPatientId = null;
+      state.formError = '';
+      state.intakeForm = createEmptyIntakeForm();
+      state.activeView = 'entrada';
+      render();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function openEditIntakeForm(patient) {
+      stopVoice();
+      state.editingPatientId = patient.id;
+      state.formError = '';
+      state.intakeForm = {
+        horaEntrada: patient.horaEntrada || nowTime24(),
+        horaSalida: patient.horaSalida || '',
+        estadoEgreso: getOutcome(patient),
+        tratamiento: patient.tratamiento || 'paciente',
+        nombre: patient.nombre || '',
+        edad: patient.edad || '',
+        procedencia: patient.procedencia || '',
+        motivoVisita: patient.motivoVisita || '',
+        observaciones: patient.observaciones || '',
+        observacionesSalida: patient.observacionesSalida || '',
+        medico: patient.medico || '',
+        enfermera: patient.enfermera || '',
+        diagnostico: patient.diagnostico || ''
+      };
+      state.activeView = 'entrada';
+      render();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function openDischargeModal(patient) {
+      stopVoice();
+      const alreadyExited = hasExit(patient);
+      state.dischargeModal = {
+        patientId: patient.id,
+        horaSalida: patient.horaSalida || nowTime24(),
+        estadoEgreso: alreadyExited ? getOutcome(patient) : 'atendido',
+        doctorTitle: detectDoctorTitle(patient.medico),
+        doctorName: stripDoctorPrefix(patient.medico),
+        nurseName: stripNursePrefix(patient.enfermera),
+        diagnostico: patient.diagnostico || '',
+        // Independiente de ingreso: siempre vacío en nueva salida
+        observacionesSalida: alreadyExited ? (patient.observacionesSalida || '') : '',
+        error: ''
+      };
+      render();
+    }
+
+    function renderTime12hControl(prefix, value24) {
+      const t = parse24To12(value24);
+      const hours = ['', '1','2','3','4','5','6','7','8','9','10','11','12'];
+      const mins = ['', ...Array.from({ length: 60 }, (_, i) => pad2(i))];
+      return `
+        <div class="flex flex-wrap items-center gap-1.5">
+          <select data-time-part="${prefix}:h" aria-label="Hora" class="min-h-[42px] rounded-lg border border-slate-300 bg-white px-2.5 text-sm font-mono-num text-slate-900 focus:border-teal-700 focus:outline-none">
+            ${hours.map((h) => `<option value="${h}" ${t.h === h ? 'selected' : ''}>${h || 'HH'}</option>`).join('')}
+          </select>
+          <span class="font-bold text-slate-500">:</span>
+          <select data-time-part="${prefix}:m" aria-label="Minutos" class="min-h-[42px] rounded-lg border border-slate-300 bg-white px-2.5 text-sm font-mono-num text-slate-900 focus:border-teal-700 focus:outline-none">
+            ${mins.map((m) => `<option value="${m}" ${t.m === m ? 'selected' : ''}>${m || 'MM'}</option>`).join('')}
+          </select>
+          <select data-time-part="${prefix}:p" aria-label="Periodo AM o PM" class="min-h-[42px] rounded-lg border border-slate-300 bg-white px-2.5 text-sm font-semibold text-slate-900 focus:border-teal-700 focus:outline-none">
+            <option value="AM" ${t.p === 'AM' ? 'selected' : ''}>a. m.</option>
+            <option value="PM" ${t.p === 'PM' ? 'selected' : ''}>p. m.</option>
+          </select>
+          <button type="button" data-action="time-now" data-prefix="${prefix}" class="min-h-[42px] rounded-lg border border-slate-300 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 whitespace-nowrap shrink-0">Ahora</button>
+        </div>
+      `;
+    }
+
+    function renderMicButton(voiceKey, label) {
+      const active = state.activeVoiceKey === voiceKey;
+      return `
+        <button type="button" data-action="voice" data-voice-key="${voiceKey}" title="Dictar ${esc(label)} por voz" aria-label="Dictar ${esc(label)}"
+          class="inline-flex min-h-[34px] items-center gap-1 rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+            active
+              ? 'border-red-600 bg-red-600 text-white'
+              : 'border-slate-300 bg-white text-slate-700 hover:border-teal-600 hover:text-teal-800'
+          }">
+          <span>${active ? 'Detener voz' : 'Dictar'}</span>
+        </button>
+      `;
+    }
+
+    // =========================================================================
+    // 9. RENDERIZADO DE PANTALLAS Y MODALES
+    // =========================================================================
+    function renderAuthScreen() {
+      if (!state.authReady || (state.user && state.profileLoading && !isBootAdmin(state.user))) {
+        return `
+          <main class="min-h-screen flex items-center justify-center p-6">
+            <section class="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 text-center">
+              <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-teal-700 font-display text-lg font-bold text-white">AM</div>
+              <h1 class="mt-4 text-xl font-bold text-slate-900">Verificando acceso</h1>
+              <p class="mt-1.5 text-sm text-slate-600">Sincronizando tu perfil clínico con la base de datos compartida...</p>
+            </section>
+          </main>`;
+      }
+
+      if (!state.user) {
+        return `
+          <main class="min-h-screen flex items-center justify-center p-4 sm:p-6">
+            <section class="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 sm:p-8">
+              <div class="flex items-center gap-3">
+                <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-teal-700 font-display text-base font-bold text-white shrink-0">AM</div>
+                <div>
+                  <h1 class="text-xl font-bold tracking-tight text-slate-900">ACE-MED</h1>
+                  <p class="text-xs text-slate-600">Control de guardia clínica · Base compartida</p>
+                </div>
+              </div>
+              <p class="mt-5 text-sm leading-relaxed text-slate-700">
+                Inicia sesión con tu cuenta de Google autorizada para consultar y sincronizar registros de pacientes en tiempo real entre todos los dispositivos del turno.
+              </p>
+              <div class="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3.5 text-xs text-slate-700">
+                <div class="font-semibold text-slate-900">Encargado de turno permanente</div>
+                <div class="mt-0.5 font-bold text-teal-800">${DEFAULT_SHIFT_SUPERVISOR}</div>
+              </div>
+              ${state.authError ? `<div role="alert" class="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-medium text-red-800">${esc(state.authError)}</div>` : ''}
+              <button type="button" data-action="sign-in" ${state.isSigningIn ? 'disabled' : ''}
+                class="mt-5 w-full min-h-[46px] rounded-xl bg-teal-700 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-teal-800 disabled:opacity-60">
+                ${state.isSigningIn ? 'Conectando con Google...' : 'Iniciar sesión con Google'}
+              </button>
+              <p class="mt-4 text-[11px] leading-relaxed text-slate-500">
+                Si abres esta app desde GitHub Pages por primera vez, agrega tu dominio <span class="font-mono-num">tu-usuario.github.io</span> en Firebase Console → Authentication → Settings → Authorized domains.
+              </p>
+            </section>
+          </main>`;
+      }
+
+      const ownReq = state.ownAccessRequest;
+      const hasPending = ownReq?.status === 'pendiente';
+      const wasRejected = ownReq?.status === 'rechazada';
+      const wasRevoked = ownReq?.status === 'aprobada';
+      const userLabel = state.user.displayName ? `${state.user.displayName} (${state.user.email})` : state.user.email;
+
+      return `
+        <main class="min-h-screen flex items-center justify-center p-4 sm:p-6">
+          <section class="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 sm:p-8">
+            <h1 class="text-xl font-bold text-slate-900">Tu acceso está pendiente de autorización</h1>
+            <p class="mt-2 text-sm text-slate-600">
+              Iniciaste sesión como <strong>${esc(userLabel)}</strong>. El administrador (<strong>${DEFAULT_SHIFT_SUPERVISOR}</strong> · <span class="font-mono-num">${ADMIN_EMAIL}</span>) debe aprobar tu solicitud antes de habilitar el acceso.
+            </p>
+            <p class="mt-2 text-xs text-slate-500">
+              Mientras tu cuenta no esté autorizada, no podrás consultar, descargar, modificar ni eliminar registros de pacientes.
+            </p>
+            ${hasPending ? `
+              <div role="status" class="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-950">
+                <div class="font-bold">Solicitud de acceso enviada (pendiente)</div>
+                <p class="mt-1">Fecha de solicitud: <span class="font-mono-num">${esc(fmtDateTimeShort(ownReq.requestedAtIso))}</span>. En cuanto seas autorizado, esta pantalla abrirá automáticamente el sistema.</p>
+              </div>` : ''}
+            ${wasRejected ? `
+              <div role="status" class="mt-4 rounded-xl border border-red-200 bg-red-50 p-3.5 text-xs text-red-900">
+                <div class="font-bold">Tu solicitud anterior fue rechazada.</div>
+                <p class="mt-1">Si necesitas ingresar al sistema, puedes volver a solicitar acceso.</p>
+              </div>` : ''}
+            ${wasRevoked ? `
+              <div role="status" class="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-950">
+                <div class="font-bold">Tu acceso anterior fue revocado.</div>
+                <p class="mt-1">Puedes volver a enviar una solicitud de acceso para que el administrador la revise.</p>
+              </div>` : ''}
+            ${state.requestFeedback ? `
+              <div role="${state.requestFeedback.type === 'error' ? 'alert' : 'status'}" class="mt-4 rounded-xl border px-3.5 py-2.5 text-xs font-medium ${state.requestFeedback.type === 'error' ? 'border-red-200 bg-red-50 text-red-800' : 'border-emerald-200 bg-emerald-50 text-emerald-900'}">
+                ${esc(state.requestFeedback.text)}
+              </div>` : ''}
+            ${!hasPending ? `
+              <button type="button" data-action="submit-access-request" ${state.isSubmittingRequest ? 'disabled' : ''}
+                class="mt-5 w-full min-h-[46px] rounded-xl bg-teal-700 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-teal-800 disabled:opacity-60">
+                ${state.isSubmittingRequest ? 'Enviando solicitud...' : (wasRejected || wasRevoked ? 'Volver a solicitar acceso' : 'Solicitar acceso')}
+              </button>` : ''}
+            <button type="button" data-action="sign-out" class="mt-3 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+              Cerrar sesión
+            </button>
+          </section>
+        </main>`;
+    }
+
+    function renderPatientsView() {
+      const q = state.searchQuery.trim().toLowerCase();
+      const filtered = state.patients.filter((p) => {
+        const outcome = getOutcome(p);
+        if (state.statusFilter !== 'todos' && outcome !== state.statusFilter) return false;
+        if (!q) return true;
+        const haystack = [p.nombre, p.procedencia, p.motivoVisita, p.diagnostico, p.medico, p.enfermera].join(' ').toLowerCase();
+        return haystack.includes(q);
+      });
+
+      const filters = [
+        { id: 'todos', label: 'Todos' },
+        { id: 'en_atencion', label: 'Activos' },
+        { id: 'atendido', label: 'Atendidos' },
+        { id: 'no_espero_turno', label: 'No esperó' },
+        { id: 'no_atendido', label: 'No atendidos' },
+        { id: 'trasladado', label: 'Trasladados' }
+      ];
+
+      return `
+        <section aria-label="Listado de pacientes" class="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6">
+          <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div class="relative flex-1 max-w-xl">
+              <label for="patient-search" class="sr-only">Buscar paciente por nombre y apellidos</label>
+              <input id="patient-search" type="search" value="${esc(state.searchQuery)}" placeholder="Buscar paciente por nombre, apellidos, motivo o procedencia..."
+                class="w-full min-h-[44px] rounded-xl border border-slate-300 bg-slate-50 px-4 pr-24 text-sm text-slate-900 placeholder:text-slate-500 focus:border-teal-700 focus:bg-white focus:outline-none" />
+              ${state.searchQuery ? `<button type="button" data-action="clear-search" class="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100">Limpiar</button>` : ''}
+            </div>
+
+            <div class="flex flex-wrap items-center gap-1 rounded-xl bg-slate-100 p-1" role="tablist" aria-label="Filtrar por estado">
+              ${filters.map((f) => `
+                <button type="button" data-action="filter-status" data-status="${f.id}"
+                  class="min-h-[36px] rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                    state.statusFilter === f.id ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                  }">${f.label}</button>
+              `).join('')}
+            </div>
+          </div>
+
+          <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 border-b border-slate-200 pb-3">
+            <span class="tabular-nums">Mostrando <strong>${filtered.length}</strong> de <strong>${state.patients.length}</strong> pacientes · Orden: más recientes primero</span>
+            ${(state.searchQuery || state.statusFilter !== 'todos') ? `<button type="button" data-action="reset-filters" class="font-semibold text-teal-800 hover:underline">Ver todos los registros</button>` : ''}
+          </div>
+
+          ${!state.patientsLoaded ? `
+            <div class="py-12 text-center text-sm text-slate-500">Cargando pacientes desde la base de datos compartida...</div>
+          ` : filtered.length === 0 ? `
+            <div class="py-12 text-center">
+              <p class="text-base font-semibold text-slate-900">${state.patients.length === 0 ? 'Aún no hay pacientes registrados en esta guardia' : 'No se encontraron coincidencias para tu búsqueda'}</p>
+              <p class="mt-1 text-sm text-slate-600">${state.patients.length === 0 ? 'Selecciona Formato de entrada para capturar el primer ingreso.' : 'Intenta con otro nombre o limpia el filtro activo.'}</p>
+              <div class="mt-4 flex justify-center gap-2">
+                ${state.patients.length === 0
+                  ? `<button type="button" data-action="go-entrada" class="min-h-[44px] rounded-xl bg-teal-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-teal-800">Abrir Formato de entrada</button>`
+                  : `<button type="button" data-action="reset-filters" class="min-h-[44px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50">Limpiar filtros</button>`}
+              </div>
+            </div>
+          ` : `
+            <div class="divide-y divide-slate-200">
+              ${filtered.map((p) => {
+                const outcome = getOutcome(p);
+                const exited = hasExit(p);
+                const confirmingDel = state.deleteConfirmPatientId === p.id;
+                return `
+                  <article class="py-4 first:pt-4 last:pb-1">
+                    <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div class="min-w-0 flex-1">
+                        <div class="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+                          <h3 class="text-base font-bold text-slate-900">${esc(p.nombre || 'Paciente sin nombre')}</h3>
+                          <span class="text-xs font-bold ${outcomeTextColor(outcome)}">${esc(outcomeLabel(outcome))}</span>
+                        </div>
+
+                        <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-600">
+                          <span>${esc(treatmentLabel(p.tratamiento))}</span>
+                          ${p.edad ? `<span aria-hidden="true">·</span><span>${esc(p.edad)}</span>` : ''}
+                          ${p.procedencia ? `<span aria-hidden="true">·</span><span>${esc(p.procedencia)}</span>` : ''}
+                          <span aria-hidden="true">·</span>
+                          <span class="font-mono-num text-slate-800">Entrada: ${esc(fmt12(p.horaEntrada))}</span>
+                          <span aria-hidden="true">·</span>
+                          <span class="font-mono-num text-slate-800">Salida: ${p.horaSalida ? esc(fmt12(p.horaSalida)) : 'Pendiente'}</span>
+                        </div>
+
+                        <dl class="mt-2.5 grid grid-cols-1 gap-1.5 text-sm text-slate-700 sm:grid-cols-2">
+                          <div><dt class="inline font-semibold text-slate-900">Motivo:</dt> <dd class="inline">${esc(p.motivoVisita || 'No registrado')}</dd></div>
+                          ${p.observaciones ? `<div><dt class="inline font-semibold text-slate-900">Obs. ingreso:</dt> <dd class="inline">${esc(p.observaciones)}</dd></div>` : ''}
+                          ${p.medico ? `<div><dt class="inline font-semibold text-slate-900">Médico:</dt> <dd class="inline">${esc(p.medico)}</dd></div>` : ''}
+                          ${p.enfermera ? `<div><dt class="inline font-semibold text-slate-900">Enfermera:</dt> <dd class="inline">${esc(p.enfermera)}</dd></div>` : ''}
+                          ${p.diagnostico ? `<div class="sm:col-span-2"><dt class="inline font-semibold text-slate-900">Diagnóstico:</dt> <dd class="inline">${esc(p.diagnostico)}</dd></div>` : ''}
+                          ${p.observacionesSalida ? `<div class="sm:col-span-2"><dt class="inline font-semibold text-slate-900">Obs. salida:</dt> <dd class="inline">${esc(p.observacionesSalida)}</dd></div>` : ''}
+                        </dl>
+                      </div>
+
+                      <div class="flex flex-wrap items-center gap-2 shrink-0">
+                        <button type="button" data-action="open-discharge" data-id="${esc(p.id)}"
+                          class="min-h-[40px] rounded-xl px-3.5 py-2 text-xs font-bold transition-colors whitespace-nowrap shrink-0 ${
+                            exited
+                              ? 'border border-teal-300 bg-teal-50 text-teal-900 hover:bg-teal-100'
+                              : 'bg-teal-700 text-white hover:bg-teal-800'
+                          }">
+                          ${exited ? 'Editar salida' : 'Registrar salida'}
+                        </button>
+                        <button type="button" data-action="open-whatsapp" data-id="${esc(p.id)}" data-type="ingreso"
+                          class="min-h-[40px] rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50 whitespace-nowrap shrink-0">
+                          WA Entrada
+                        </button>
+                        ${exited ? `
+                          <button type="button" data-action="open-whatsapp" data-id="${esc(p.id)}" data-type="salida"
+                            class="min-h-[40px] rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-900 hover:bg-emerald-100 whitespace-nowrap shrink-0">
+                            WA Salida
+                          </button>` : ''}
+                        <button type="button" data-action="edit-patient" data-id="${esc(p.id)}"
+                          class="min-h-[40px] rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0">
+                          Editar
+                        </button>
+                        ${confirmingDel ? `
+                          <button type="button" data-action="confirm-delete-one" data-id="${esc(p.id)}" class="min-h-[40px] rounded-xl bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-700 whitespace-nowrap shrink-0">Confirmar borrado</button>
+                          <button type="button" data-action="cancel-delete-one" class="min-h-[40px] rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 whitespace-nowrap shrink-0">Cancelar</button>
+                        ` : `
+                          <button type="button" data-action="ask-delete-one" data-id="${esc(p.id)}" class="min-h-[40px] rounded-xl border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 whitespace-nowrap shrink-0">Eliminar</button>
+                        `}
+                      </div>
+                    </div>
+                  </article>
+                `;
+              }).join('')}
+            </div>
+          `}
+        </section>`;
+    }
+
+    function renderIntakeView() {
+      const f = state.intakeForm || createEmptyIntakeForm();
+      const isEditing = Boolean(state.editingPatientId);
+      return `
+        <section aria-label="Formato de entrada de paciente" class="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-slate-200 pb-4">
+            <div>
+              <h2 class="text-xl font-bold text-slate-900">${isEditing ? 'Editar registro de paciente' : 'Formato de entrada de paciente'}</h2>
+              <p class="mt-0.5 text-xs text-slate-600">Captura clínica rápida con reloj de 12 horas, sugerencias, dictado por voz y corrector ortográfico.</p>
+            </div>
+            <button type="button" data-action="spellcheck-intake"
+              class="min-h-[42px] rounded-xl border border-teal-300 bg-teal-50 px-4 py-2 text-xs font-bold text-teal-900 hover:bg-teal-100 whitespace-nowrap shrink-0">
+              Rectificar escritura y ortografía
+            </button>
+          </div>
+
+          ${state.formError ? `<div role="alert" class="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800">${esc(state.formError)}</div>` : ''}
+
+          <form id="intake-form" class="mt-5 space-y-5" novalidate>
+            <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div>
+                <label class="block text-xs font-bold text-slate-800 mb-1.5">Hora de entrada (formato 12 h)</label>
+                ${renderTime12hControl('intake-entrada', f.horaEntrada)}
+              </div>
+
+              <div>
+                <span class="block text-xs font-bold text-slate-800 mb-1.5">Tratamiento</span>
+                <div class="grid grid-cols-3 gap-1.5 rounded-xl bg-slate-100 p-1">
+                  ${[
+                    { v: 'paciente', l: 'Paciente' },
+                    { v: 'usuario', l: 'Usuario' },
+                    { v: 'usuaria', l: 'Usuaria' }
+                  ].map((opt) => `
+                    <button type="button" data-action="set-tratamiento" data-val="${opt.v}"
+                      class="min-h-[38px] rounded-lg text-xs font-semibold transition-colors ${
+                        f.tratamiento === opt.v ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                      }">${opt.l}</button>
+                  `).join('')}
+                </div>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div class="md:col-span-2">
+                <div class="flex items-center justify-between gap-2 mb-1.5">
+                  <label for="f-nombre" class="text-xs font-bold text-slate-800">Nombre completo del paciente</label>
+                  ${renderMicButton('intake:nombre', 'nombre')}
+                </div>
+                <input id="f-nombre" data-intake-field="nombre" type="text" maxlength="200" value="${esc(f.nombre)}"
+                  placeholder="Ej. María Guadalupe Hernández López"
+                  class="w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3.5 text-sm text-slate-900 focus:border-teal-700 focus:outline-none" />
+              </div>
+
+              <div>
+                <div class="flex items-center justify-between gap-2 mb-1.5">
+                  <label for="f-edad" class="text-xs font-bold text-slate-800">Edad</label>
+                  ${renderMicButton('intake:edad', 'edad')}
+                </div>
+                <input id="f-edad" data-intake-field="edad" type="text" maxlength="60" value="${esc(f.edad)}"
+                  placeholder="Ej. 34 años"
+                  class="w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3.5 text-sm text-slate-900 focus:border-teal-700 focus:outline-none" />
+              </div>
+            </div>
+
+            <div>
+              <div class="flex items-center justify-between gap-2 mb-1.5">
+                <label for="f-procedencia" class="text-xs font-bold text-slate-800">Procedencia</label>
+                ${renderMicButton('intake:procedencia', 'procedencia')}
+              </div>
+              <input id="f-procedencia" data-intake-field="procedencia" type="text" maxlength="200" value="${esc(f.procedencia)}"
+                placeholder="Colonia, comunidad o localidad de origen"
+                class="w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3.5 text-sm text-slate-900 focus:border-teal-700 focus:outline-none" />
+            </div>
+
+            <div>
+              <div class="flex items-center justify-between gap-2 mb-1.5">
+                <label for="f-motivo" class="text-xs font-bold text-slate-800">Motivo de visita</label>
+                ${renderMicButton('intake:motivoVisita', 'motivo de visita')}
+              </div>
+              <textarea id="f-motivo" data-intake-field="motivoVisita" rows="2" maxlength="1000"
+                placeholder="Describe el motivo referido al ingreso..."
+                class="w-full rounded-xl border border-slate-300 bg-white p-3 text-sm text-slate-900 focus:border-teal-700 focus:outline-none">${esc(f.motivoVisita)}</textarea>
+              <div class="mt-2 flex flex-wrap gap-1.5">
+                ${MOTIVO_SUGGESTIONS.map((s) => `
+                  <button type="button" data-action="append-suggestion" data-target="motivoVisita" data-text="${esc(s)}"
+                    class="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 hover:border-teal-600 hover:bg-teal-50 hover:text-teal-900">${esc(s)}</button>
+                `).join('')}
+              </div>
+            </div>
+
+            <div>
+              <div class="flex items-center justify-between gap-2 mb-1.5">
+                <label for="f-obs" class="text-xs font-bold text-slate-800">Observaciones de ingreso (sin diagnóstico)</label>
+                ${renderMicButton('intake:observaciones', 'observaciones de ingreso')}
+              </div>
+              <textarea id="f-obs" data-intake-field="observaciones" rows="2" maxlength="1500"
+                placeholder="Notas operativas de recepción (sin diagnóstico al ingreso)..."
+                class="w-full rounded-xl border border-slate-300 bg-white p-3 text-sm text-slate-900 focus:border-teal-700 focus:outline-none">${esc(f.observaciones)}</textarea>
+              <div class="mt-2 flex flex-wrap gap-1.5">
+                ${OBS_ENTRADA_SUGGESTIONS.map((s) => `
+                  <button type="button" data-action="append-suggestion" data-target="observaciones" data-text="${esc(s)}"
+                    class="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 hover:border-teal-600 hover:bg-teal-50 hover:text-teal-900">${esc(s)}</button>
+                `).join('')}
+              </div>
+            </div>
+
+            <div class="flex flex-col-reverse gap-2.5 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-end">
+              <button type="button" data-action="cancel-intake"
+                class="min-h-[44px] rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                Cancelar
+              </button>
+              <button type="button" data-action="save-intake-wa" ${state.isSaving ? 'disabled' : ''}
+                class="min-h-[44px] rounded-xl border border-emerald-700 bg-emerald-50 px-5 py-2.5 text-sm font-bold text-emerald-900 hover:bg-emerald-100 disabled:opacity-60">
+                ${state.isSaving ? 'Guardando...' : 'Guardar y abrir WhatsApp'}
+              </button>
+              <button type="submit" ${state.isSaving ? 'disabled' : ''}
+                class="min-h-[44px] rounded-xl bg-teal-700 px-6 py-2.5 text-sm font-bold text-white hover:bg-teal-800 disabled:opacity-60">
+                ${state.isSaving ? 'Sincronizando...' : (isEditing ? 'Guardar cambios' : 'Guardar ingreso')}
+              </button>
+            </div>
+          </form>
+        </section>`;
+    }
+
+    function renderSecurityView() {
+      const admin = isAdmin();
+      return `
+        <div class="space-y-6">
+          <section class="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6">
+            <h2 class="text-lg font-bold text-slate-900">Respaldos y recuperación de datos</h2>
+            <p class="mt-1 text-sm text-slate-600">Exporta una copia en JSON de todos los registros o restaura un archivo previo sin crear duplicados.</p>
+            <div class="mt-4 flex flex-wrap gap-2.5">
+              <button type="button" data-action="export-json" class="min-h-[44px] rounded-xl bg-teal-700 px-4 py-2 text-xs font-bold text-white hover:bg-teal-800">Exportar respaldo JSON</button>
+              <label class="inline-flex min-h-[44px] cursor-pointer items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-800 hover:bg-slate-50">
+                <span>Restaurar respaldo JSON</span>
+                <input id="restore-json-input" type="file" accept="application/json" class="sr-only" />
+              </label>
+              <button type="button" data-action="download-pdf" class="min-h-[44px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-800 hover:bg-slate-50">Descargar informe PDF</button>
+              ${admin ? `
+                <button type="button" data-action="open-clear-modal" ${state.patients.length === 0 ? 'disabled' : ''}
+                  class="min-h-[44px] rounded-xl border border-red-300 bg-red-50 px-4 py-2 text-xs font-bold text-red-800 hover:bg-red-100 disabled:opacity-50">
+                  Eliminar todos los registros (Solo Admin)
+                </button>` : ''}
+            </div>
+          </section>
+
+          ${isPrimaryAdmin() ? (() => {
+            const pendingReqs = state.accessRequests.filter((r) => r.status === 'pendiente');
+            const authorizedList = state.staffUsers.filter((u) => u.approved);
+            return `
+            <section class="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6">
+              <div class="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 class="text-lg font-bold text-slate-900">Personal autorizado (Control de acceso)</h2>
+                  <p class="mt-1 text-sm text-slate-600">Revisa solicitudes de acceso, asigna el rol correspondiente o revoca el acceso de cuentas autorizadas.</p>
+                </div>
+                <div class="flex flex-wrap gap-2 shrink-0">
+                  <button type="button" data-action="set-access-subtab" data-tab="requests"
+                    class="min-h-[38px] rounded-lg border px-3 py-1.5 text-xs font-bold ${state.accessSubTab === 'requests' ? 'border-teal-700 bg-teal-700 text-white' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}">
+                    Solicitudes de acceso (${state.accessRequestsError ? '!' : state.accessRequestsLoading ? '...' : pendingReqs.length})
+                  </button>
+                  <button type="button" data-action="set-access-subtab" data-tab="staff"
+                    class="min-h-[38px] rounded-lg border px-3 py-1.5 text-xs font-bold ${state.accessSubTab === 'staff' ? 'border-teal-700 bg-teal-700 text-white' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}">
+                    Personal autorizado (${state.staffUsersError ? '!' : authorizedList.length})
+                  </button>
+                </div>
+              </div>
+              ${state.accessPanelNotice ? `
+                <div role="${state.accessPanelNotice.type === 'error' ? 'alert' : 'status'}" class="mt-3 rounded-xl border px-3.5 py-2.5 text-xs font-medium ${state.accessPanelNotice.type === 'error' ? 'border-red-200 bg-red-50 text-red-800' : 'border-emerald-200 bg-emerald-50 text-emerald-900'}">
+                  ${esc(state.accessPanelNotice.text)}
+                </div>` : ''}
+              ${state.accessSubTab === 'requests' ? `
+                <div class="mt-4">
+                  <div class="mb-3 flex items-center justify-between gap-2">
+                    <span class="text-xs text-slate-500">
+                      ${state.accessRequestsLoading
+                        ? 'Consultando solicitudes pendientes en el servidor...'
+                        : state.accessRequestsError
+                          ? 'La consulta a Firestore devolvió un error.'
+                          : `${pendingReqs.length} ${pendingReqs.length === 1 ? 'solicitud pendiente' : 'solicitudes pendientes'}`}
+                    </span>
+                    <button type="button" data-action="refresh-access-requests" ${state.accessRequestsLoading ? 'disabled' : ''}
+                      class="min-h-[34px] rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+                      ${state.accessRequestsLoading ? 'Consultando...' : 'Actualizar'}
+                    </button>
+                  </div>
+                  ${state.accessRequestsError ? `
+                    <div role="alert" class="rounded-xl border border-red-200 bg-red-50 px-3.5 py-3 text-xs text-red-800">
+                      <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div class="min-w-0">
+                          <div class="font-bold">Error al consultar las solicitudes de acceso</div>
+                          <div class="mt-1 font-mono-num break-words">${esc(state.accessRequestsError)}</div>
+                        </div>
+                        <button type="button" data-action="refresh-access-requests" ${state.accessRequestsLoading ? 'disabled' : ''}
+                          class="min-h-[34px] shrink-0 rounded-lg border border-red-300 bg-white px-3 py-1 text-xs font-semibold text-red-800 hover:bg-red-100 disabled:opacity-60">
+                          Reintentar
+                        </button>
+                      </div>
+                    </div>` : state.accessRequestsLoading && pendingReqs.length === 0 ? `<p role="status" class="py-3 text-sm text-slate-500">Cargando solicitudes de acceso pendientes...</p>` : pendingReqs.length === 0 ? `<p class="py-2 text-sm text-slate-500">No hay solicitudes de acceso pendientes.</p>` : `<div class="divide-y divide-slate-200">${pendingReqs.map((r) => {
+                    const roleVal = state.requestRoleDrafts[r.uid] || 'staff';
+                    const busy = state.accessBusyKey === r.uid;
+                    return `
+                      <div class="flex flex-col gap-3 py-3.5 lg:flex-row lg:items-center lg:justify-between">
+                        <div class="min-w-0">
+                          <div class="text-sm font-bold text-slate-900 truncate">${esc(r.displayName || r.email)}</div>
+                          <div class="text-xs font-mono-num text-slate-600 truncate">${esc(r.email)}</div>
+                          <div class="mt-0.5 text-xs text-slate-500">Solicitado: <span class="font-mono-num">${esc(fmtDateTimeShort(r.requestedAtIso))}</span> <span class="mx-1 text-slate-300">·</span> <span class="font-mono-num text-[11px] text-slate-400">UID: ${esc(r.uid)}</span></div>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-2 shrink-0">
+                          <select data-action="select-request-role" data-uid="${esc(r.uid)}" ${busy ? 'disabled' : ''} aria-label="Rol para ${esc(r.email)}"
+                            class="min-h-[38px] rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-800">
+                            <option value="staff" ${roleVal === 'staff' ? 'selected' : ''}>Personal</option>
+                            <option value="admin" ${roleVal === 'admin' ? 'selected' : ''}>Administrador</option>
+                          </select>
+                          <button type="button" data-action="approve-access-request" data-uid="${esc(r.uid)}" ${busy ? 'disabled' : ''}
+                            class="min-h-[38px] rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-800 disabled:opacity-60">
+                            Aprobar
+                          </button>
+                          <button type="button" data-action="reject-access-request" data-uid="${esc(r.uid)}" ${busy ? 'disabled' : ''}
+                            class="min-h-[38px] rounded-lg border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-bold text-red-800 hover:bg-red-100 disabled:opacity-60">
+                            Rechazar
+                          </button>
+                        </div>
+                      </div>`;
+                  }).join('')}</div>`}
+                </div>` : `
+                <div class="mt-4 divide-y divide-slate-200">
+                  ${state.staffUsersError ? `
+                    <div role="alert" class="rounded-xl border border-red-200 bg-red-50 px-3.5 py-3 text-xs text-red-800">
+                      <div class="font-bold">Error al consultar el personal autorizado</div>
+                      <div class="mt-1 font-mono-num break-words">${esc(state.staffUsersError)}</div>
+                    </div>` : authorizedList.length === 0 ? `<p class="py-4 text-sm text-slate-500">Solo tu cuenta administradora está registrada por ahora.</p>` : authorizedList.map((u) => {
+                    const isSelf = u.uid === state.user.uid || u.email.toLowerCase() === ADMIN_EMAIL;
+                    const busy = state.accessBusyKey === u.uid;
+                    return `
+                      <div class="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <div class="text-sm font-bold text-slate-900">${esc(u.displayName || u.email)}</div>
+                          <div class="text-xs text-slate-600">${esc(u.email)} · ${u.role === 'admin' ? 'Administrador' : 'Personal'}</div>
+                        </div>
+                        ${isSelf ? `<span class="text-xs font-semibold text-teal-800">Cuenta principal activa</span>` : `
+                          <div class="flex flex-wrap items-center gap-2">
+                            <select data-action="change-staff-role" data-uid="${esc(u.uid)}" ${busy ? 'disabled' : ''} aria-label="Rol de ${esc(u.email)}"
+                              class="min-h-[38px] rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-800">
+                              <option value="staff" ${u.role === 'staff' ? 'selected' : ''}>Personal</option>
+                              <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Administrador</option>
+                            </select>
+                            <button type="button" data-action="revoke-staff-access" data-uid="${esc(u.uid)}" ${busy ? 'disabled' : ''}
+                              class="min-h-[38px] rounded-lg border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-bold text-red-800 hover:bg-red-100 disabled:opacity-60">
+                              Revocar acceso
+                            </button>
+                          </div>`}
+                      </div>`;
+                  }).join('')}
+                </div>`}
+            </section>`;
+          })() : ''}
+
+          <section class="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6">
+            <h2 class="text-lg font-bold text-slate-900">Bitácora inmutable de auditoría</h2>
+            <p class="mt-1 text-sm text-slate-600">Historial automático de registros, salidas, respaldos y acciones administrativas.</p>
+            <div class="mt-4 divide-y divide-slate-200 max-h-96 overflow-y-auto">
+              ${state.auditLogs.length === 0 ? `<p class="py-4 text-sm text-slate-500">Sin eventos registrados todavía.</p>` : state.auditLogs.map((log) => `
+                <div class="py-2.5 text-xs">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <span class="font-semibold text-slate-900">${esc(log.summary)}</span>
+                    <span class="font-mono-num text-slate-500">${esc(fmtDateTimeShort(log.createdAtIso))}</span>
+                  </div>
+                  <div class="mt-0.5 text-slate-600">${esc(log.actorName || log.actorEmail)} · ${esc(log.actorEmail)}</div>
+                </div>
+              `).join('')}
+            </div>
+          </section>
+        </div>`;
+    }
+
+    function renderModals() {
+      let html = '';
+
+      // Modal 1: Salida / Egreso
+      if (state.dischargeModal) {
+        const dm = state.dischargeModal;
+        const patient = state.patients.find((p) => p.id === dm.patientId);
+        if (patient) {
+          html += `
+            <div class="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/60 p-3 sm:p-5 overflow-y-auto">
+              <div role="dialog" aria-modal="true" aria-label="Registrar salida" class="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 my-auto max-h-[92vh] overflow-y-auto">
+                <div class="flex items-start justify-between gap-3 border-b border-slate-200 pb-3">
+                  <div>
+                    <h2 class="text-lg font-bold text-slate-900">Registrar salida de paciente</h2>
+                    <p class="text-xs text-slate-600">${esc(patient.nombre)} · Entrada: ${esc(fmt12(patient.horaEntrada))}</p>
+                  </div>
+                  <button type="button" data-action="close-discharge" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Cerrar</button>
+                </div>
+
+                ${dm.error ? `<div role="alert" class="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800">${esc(dm.error)}</div>` : ''}
+
+                <div class="mt-4 space-y-4">
+                  <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <label class="block text-xs font-bold text-slate-800 mb-1.5">Hora de salida (formato 12 h)</label>
+                      ${renderTime12hControl('discharge-salida', dm.horaSalida)}
+                    </div>
+                    <button type="button" data-action="spellcheck-discharge" class="min-h-[40px] rounded-xl border border-teal-300 bg-teal-50 px-3.5 py-2 text-xs font-bold text-teal-900 hover:bg-teal-100">Rectificar ortografía</button>
+                  </div>
+
+                  <div>
+                    <span class="block text-xs font-bold text-slate-800 mb-1.5">Estado de egreso</span>
+                    <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      ${EXIT_OUTCOMES.map((o) => `
+                        <button type="button" data-action="set-discharge-outcome" data-val="${o.value}"
+                          class="rounded-xl border p-3 text-left transition-colors ${
+                            dm.estadoEgreso === o.value ? 'border-teal-700 bg-teal-50 text-teal-950' : 'border-slate-200 bg-white text-slate-800 hover:bg-slate-50'
+                          }">
+                          <div class="text-xs font-bold">${o.label}</div>
+                          <div class="mt-0.5 text-[11px] text-slate-600">${o.desc}</div>
+                        </button>
+                      `).join('')}
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <div class="flex items-center justify-between gap-2 mb-1.5">
+                        <label for="d-medico" class="text-xs font-bold text-slate-800">Médico que lo atendió</label>
+                        ${renderMicButton('discharge:doctorName', 'médico')}
+                      </div>
+                      <div class="flex gap-1.5">
+                        <select data-discharge-field="doctorTitle" aria-label="Título médico" class="min-h-[42px] rounded-xl border border-slate-300 bg-slate-50 px-2.5 text-xs font-bold text-slate-900">
+                          <option value="DR." ${dm.doctorTitle === 'DR.' ? 'selected' : ''}>DR.</option>
+                          <option value="DRA." ${dm.doctorTitle === 'DRA.' ? 'selected' : ''}>DRA.</option>
+                        </select>
+                        <input id="d-medico" data-discharge-field="doctorName" type="text" value="${esc(dm.doctorName)}" placeholder="Nombre y apellidos"
+                          class="flex-1 min-h-[42px] rounded-xl border border-slate-300 px-3 text-sm text-slate-900 focus:border-teal-700 focus:outline-none" />
+                      </div>
+                      <p class="mt-1 text-[11px] text-slate-500">Se guardará como: <strong>${esc(formatDoctor(dm.doctorTitle, dm.doctorName) || '—')}</strong></p>
+                    </div>
+
+                    <div>
+                      <div class="flex items-center justify-between gap-2 mb-1.5">
+                        <label for="d-enfermera" class="text-xs font-bold text-slate-800">Enfermera que lo atendió</label>
+                        ${renderMicButton('discharge:nurseName', 'enfermera')}
+                      </div>
+                      <div class="flex items-center">
+                        <span class="inline-flex min-h-[42px] items-center rounded-l-xl border border-r-0 border-slate-300 bg-slate-100 px-3 text-xs font-bold text-slate-700">ENF.</span>
+                        <input id="d-enfermera" data-discharge-field="nurseName" type="text" value="${esc(dm.nurseName)}" placeholder="Nombre y apellidos"
+                          class="flex-1 min-h-[42px] rounded-r-xl border border-slate-300 px-3 text-sm text-slate-900 focus:border-teal-700 focus:outline-none" />
+                      </div>
+                      <p class="mt-1 text-[11px] text-slate-500">Se guardará como: <strong>${esc(formatNurse(dm.nurseName) || '—')}</strong></p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div class="flex items-center justify-between gap-2 mb-1.5">
+                      <label for="d-dx" class="text-xs font-bold text-slate-800">Diagnóstico (emitido por personal médico)</label>
+                      ${renderMicButton('discharge:diagnostico', 'diagnóstico')}
+                    </div>
+                    <textarea id="d-dx" data-discharge-field="diagnostico" rows="2" maxlength="1500" placeholder="Diagnóstico clínico de egreso..."
+                      class="w-full rounded-xl border border-slate-300 p-3 text-sm text-slate-900 focus:border-teal-700 focus:outline-none">${esc(dm.diagnostico)}</textarea>
+                  </div>
+
+                  <div>
+                    <div class="flex items-center justify-between gap-2 mb-1.5">
+                      <label for="d-obs-sal" class="text-xs font-bold text-slate-800">Observaciones de salida (independiente del ingreso)</label>
+                      ${renderMicButton('discharge:observacionesSalida', 'observaciones de salida')}
+                    </div>
+                    <textarea id="d-obs-sal" data-discharge-field="observacionesSalida" rows="2" maxlength="1500"
+                      placeholder="Escribe las observaciones específicas de la salida..."
+                      class="w-full rounded-xl border border-slate-300 p-3 text-sm text-slate-900 focus:border-teal-700 focus:outline-none">${esc(dm.observacionesSalida)}</textarea>
+                  </div>
+                </div>
+
+                <div class="mt-5 flex flex-col-reverse gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:justify-end">
+                  <button type="button" data-action="close-discharge" class="min-h-[42px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700">Cancelar</button>
+                  <button type="button" data-action="save-discharge" data-open-wa="1" ${state.isSaving ? 'disabled' : ''} class="min-h-[42px] rounded-xl border border-emerald-700 bg-emerald-50 px-4 py-2 text-xs font-bold text-emerald-900 hover:bg-emerald-100">Guardar y abrir WhatsApp</button>
+                  <button type="button" data-action="save-discharge" data-open-wa="0" ${state.isSaving ? 'disabled' : ''} class="min-h-[42px] rounded-xl bg-teal-700 px-5 py-2 text-xs font-bold text-white hover:bg-teal-800">Guardar salida</button>
+                </div>
+              </div>
+            </div>`;
+        }
+      }
+
+      // Modal 2: WhatsApp
+      if (state.whatsappModal) {
+        const p = state.patients.find((x) => x.id === state.whatsappModal.patientId);
+        if (p) {
+          const text = buildWhatsAppText(p, state.whatsappModal.type, state.shiftConfig.incluirCamposVaciosEnMensaje);
+          const groupUrl = state.shiftConfig.whatsappGroupUrl || DEFAULT_WHATSAPP_GROUP_URL;
+          html += `
+            <div class="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/60 p-3 sm:p-5">
+              <div role="dialog" aria-modal="true" aria-label="Mensaje para WhatsApp" class="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-5 sm:p-6">
+                <div class="flex items-center justify-between border-b border-slate-200 pb-3">
+                  <h2 class="text-base font-bold text-slate-900">Mensaje de ${state.whatsappModal.type === 'salida' ? 'salida' : 'ingreso'} para WhatsApp</h2>
+                  <button type="button" data-action="close-whatsapp" class="rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700">Cerrar</button>
+                </div>
+                <pre id="wa-preview-text" class="mt-4 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-xl border border-slate-200 bg-slate-50 p-3.5 font-sans text-xs leading-relaxed text-slate-900">${esc(text)}</pre>
+                <label class="mt-3 flex items-center gap-2 text-xs text-slate-700">
+                  <input type="checkbox" data-action="toggle-wa-empty" ${state.shiftConfig.incluirCamposVaciosEnMensaje ? 'checked' : ''} class="h-4 w-4 rounded border-slate-300 text-teal-700" />
+                  <span>Incluir campos vacíos como "No registrado"</span>
+                </label>
+                <div class="mt-4 flex flex-wrap gap-2">
+                  <button type="button" data-action="copy-wa-text" class="flex-1 min-h-[44px] rounded-xl bg-teal-700 px-4 py-2 text-xs font-bold text-white hover:bg-teal-800">Copiar mensaje</button>
+                  <a href="${esc(groupUrl)}" target="_blank" rel="noopener noreferrer" class="inline-flex flex-1 min-h-[44px] items-center justify-center rounded-xl bg-emerald-700 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-800">Abrir grupo WhatsApp</a>
+                </div>
+              </div>
+            </div>`;
+        }
+      }
+
+      // Modal 3: Informe PDF y grupo de WhatsApp
+      if (state.reportModalOpen) {
+        const c = computeCounts(state.patients);
+        html += `
+          <div class="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/60 p-3 sm:p-5">
+            <div role="dialog" aria-modal="true" aria-label="Informe de guardia" class="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-5 sm:p-6">
+              <div class="flex items-center justify-between border-b border-slate-200 pb-3">
+                <h2 class="text-base font-bold text-slate-900">Informe de guardia y envío</h2>
+                <button type="button" data-action="close-report" class="rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700">Cerrar</button>
+              </div>
+              <div class="mt-4 grid grid-cols-3 gap-2 text-center text-xs">
+                <div class="rounded-xl border border-slate-200 bg-slate-50 p-2.5"><div class="text-slate-600">Total</div><div class="text-lg font-bold tabular-nums">${c.total}</div></div>
+                <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-2.5"><div class="text-emerald-900">Atendidos</div><div class="text-lg font-bold tabular-nums text-emerald-800">${c.atendidos}</div></div>
+                <div class="rounded-xl border border-amber-200 bg-amber-50 p-2.5"><div class="text-amber-900">Sin salida</div><div class="text-lg font-bold tabular-nums text-amber-900">${c.enAtencion}</div></div>
+              </div>
+              <div class="mt-4">
+                <label for="wa-group-url" class="block text-xs font-bold text-slate-800 mb-1">Enlace del grupo de WhatsApp</label>
+                <div class="flex gap-2">
+                  <input id="wa-group-url" type="url" value="${esc(state.shiftConfig.whatsappGroupUrl)}" class="flex-1 min-h-[42px] rounded-xl border border-slate-300 px-3 text-xs text-slate-900" />
+                  <button type="button" data-action="save-wa-group" class="min-h-[42px] rounded-xl border border-slate-300 bg-slate-50 px-3 text-xs font-bold text-slate-800 hover:bg-slate-100">Guardar</button>
+                </div>
+              </div>
+              <div class="mt-4 flex flex-col gap-2">
+                <button type="button" data-action="download-pdf" class="min-h-[44px] rounded-xl bg-teal-700 px-4 py-2 text-xs font-bold text-white hover:bg-teal-800">Descargar informe PDF compacto (A4)</button>
+                <button type="button" data-action="copy-shift-summary" class="min-h-[44px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-800 hover:bg-slate-50">Copiar resumen de guardia para WhatsApp</button>
+                <a href="${esc(state.shiftConfig.whatsappGroupUrl)}" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-emerald-700 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-800">Abrir grupo de WhatsApp</a>
+              </div>
+            </div>
+          </div>`;
+      }
+
+      // Modal 4: Corrector ortográfico
+      if (state.spellModal) {
+        const changed = state.spellModal.proposals.filter((p) => p.changed);
+        html += `
+          <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3 sm:p-5">
+            <div role="dialog" aria-modal="true" aria-label="Revisión de escritura y ortografía" class="w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 max-h-[88vh] overflow-y-auto">
+              <div class="flex items-center justify-between border-b border-slate-200 pb-3">
+                <h2 class="text-base font-bold text-slate-900">Rectificación de escritura y ortografía</h2>
+                <button type="button" data-action="close-spell" class="rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700">Cerrar</button>
+              </div>
+              ${changed.length === 0 ? `
+                <p class="mt-4 text-sm text-emerald-800 font-medium">No se detectaron errores ortográficos ni de formato en los campos capturados.</p>
+                <div class="mt-4 flex justify-end"><button type="button" data-action="close-spell" class="min-h-[40px] rounded-xl bg-teal-700 px-4 py-2 text-xs font-bold text-white">Entendido</button></div>
+              ` : `
+                <div class="mt-4 space-y-3">
+                  ${changed.map((item) => `
+                    <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs">
+                      <div class="font-bold text-slate-900">${esc(item.label)} · <span class="font-normal text-slate-600">${esc(item.reasons.join(', '))}</span></div>
+                      <div class="mt-1 text-slate-500 line-through">${esc(item.original)}</div>
+                      <div class="mt-1 font-semibold text-teal-900">${esc(item.proposed)}</div>
+                    </div>
+                  `).join('')}
+                </div>
+                <div class="mt-5 flex justify-end gap-2">
+                  <button type="button" data-action="close-spell" class="min-h-[42px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700">Cancelar</button>
+                  <button type="button" data-action="apply-spell" class="min-h-[42px] rounded-xl bg-teal-700 px-5 py-2 text-xs font-bold text-white hover:bg-teal-800">Aplicar correcciones</button>
+                </div>
+              `}
+            </div>
+          </div>`;
+      }
+
+      // Modal 5: Eliminación total (Solo cuenta administradora + Doble confirmación)
+      if (state.clearModal) {
+        const cm = state.clearModal;
+        const admin = isAdmin();
+        const canConfirm = admin && cm.checked && cm.phrase.trim().toUpperCase() === 'ELIMINAR TODO' && !cm.busy;
+        html += `
+          <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3 sm:p-5">
+            <div role="dialog" aria-modal="true" aria-label="Eliminar todos los registros" class="w-full max-w-lg rounded-2xl border border-red-200 bg-white p-5 sm:p-6">
+              <div class="flex items-center justify-between border-b border-slate-200 pb-3">
+                <h2 class="text-base font-bold text-red-900">Eliminar todos los registros del turno</h2>
+                <button type="button" data-action="close-clear" class="rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700">Cancelar</button>
+              </div>
+              ${!admin ? `
+                <p class="mt-4 text-sm text-red-800 font-medium">Acceso restringido: solo la cuenta administradora verificada (${ADMIN_EMAIL}) puede eliminar todos los registros de la base de datos compartida.</p>
+                <div class="mt-4 flex justify-end"><button type="button" data-action="close-clear" class="min-h-[42px] rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white">Entendido</button></div>
+              ` : `
+                <p class="mt-3 text-sm text-slate-700">
+                  Esta acción eliminará permanentemente los <strong>${state.patients.length}</strong> registros actuales para todos los dispositivos conectados y quedará registrada en la bitácora de auditoría.
+                </p>
+                <div class="mt-3 flex flex-wrap gap-2">
+                  <button type="button" data-action="download-pdf" class="min-h-[38px] rounded-lg border border-slate-300 bg-slate-50 px-3 text-xs font-semibold text-slate-800 hover:bg-slate-100">1. Descargar PDF antes</button>
+                  <button type="button" data-action="export-json" class="min-h-[38px] rounded-lg border border-slate-300 bg-slate-50 px-3 text-xs font-semibold text-slate-800 hover:bg-slate-100">2. Exportar respaldo JSON</button>
+                </div>
+                <label class="mt-4 flex items-start gap-2.5 text-xs text-slate-800">
+                  <input type="checkbox" data-action="clear-toggle-check" ${cm.checked ? 'checked' : ''} class="mt-0.5 h-4 w-4 rounded border-slate-300 text-red-600" />
+                  <span>Confirmo como responsable administrador (<strong>${esc(state.user.email)}</strong>) que deseo vaciar el turno completo y que esta acción no se puede deshacer.</span>
+                </label>
+                <div class="mt-3">
+                  <label for="clear-phrase" class="block text-xs font-bold text-slate-800 mb-1">Segunda confirmación: escribe <span class="font-mono-num text-red-800">ELIMINAR TODO</span></label>
+                  <input id="clear-phrase" type="text" value="${esc(cm.phrase)}" placeholder="ELIMINAR TODO" autocomplete="off"
+                    class="w-full min-h-[42px] rounded-xl border border-slate-300 px-3 text-sm font-mono-num text-slate-900 focus:border-red-600 focus:outline-none" />
+                </div>
+                ${cm.error ? `<p class="mt-2 text-xs font-semibold text-red-700">${esc(cm.error)}</p>` : ''}
+                <div class="mt-5 flex justify-end gap-2">
+                  <button type="button" data-action="close-clear" class="min-h-[42px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700">Cancelar</button>
+                  <button type="button" data-action="execute-clear-all" ${canConfirm ? '' : 'disabled'}
+                    class="min-h-[42px] rounded-xl bg-red-600 px-5 py-2 text-xs font-bold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40">
+                    ${cm.busy ? 'Eliminando...' : 'Confirmar eliminación total'}
+                  </button>
+                </div>
+              `}
+            </div>
+          </div>`;
+      }
+
+      return html;
+    }
+
+    function render() {
+      const root = document.getElementById('root');
+      if (!root) return;
+
+      if (!state.authReady || !state.user || (state.profileLoading && !isBootAdmin(state.user)) || !isAuthorized()) {
+        root.innerHTML = renderAuthScreen();
+        return;
+      }
+
+      const c = computeCounts(state.patients);
+      const admin = isAdmin();
+
+      root.innerHTML = `
+        <div class="min-h-screen flex flex-col pb-20 md:pb-0">
+          <!-- Barra superior de 3 zonas -->
+          <header class="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur-sm">
+            <div class="mx-auto flex max-w-[1360px] items-center justify-between gap-8 px-4 py-3 sm:px-6 lg:px-8">
+              <button type="button" data-action="nav" data-view="pacientes" class="font-display text-lg font-extrabold tracking-tight text-teal-800 whitespace-nowrap shrink-0">
+                ACE-MED
+              </button>
+
+              <nav aria-label="Navegación principal" class="hidden md:flex items-center gap-6 text-sm font-semibold">
+                <button type="button" data-action="nav" data-view="pacientes" class="whitespace-nowrap shrink-0 pb-0.5 transition-colors ${state.activeView === 'pacientes' ? 'text-teal-800 border-b-2 border-teal-700' : 'text-slate-600 hover:text-slate-900'}">Pacientes</button>
+                <button type="button" data-action="nav" data-view="entrada" class="whitespace-nowrap shrink-0 pb-0.5 transition-colors ${state.activeView === 'entrada' ? 'text-teal-800 border-b-2 border-teal-700' : 'text-slate-600 hover:text-slate-900'}">Formato de entrada</button>
+                <button type="button" data-action="nav" data-view="seguridad" class="whitespace-nowrap shrink-0 pb-0.5 transition-colors ${state.activeView === 'seguridad' ? 'text-teal-800 border-b-2 border-teal-700' : 'text-slate-600 hover:text-slate-900'}">Seguridad</button>
+              </nav>
+
+              <div class="flex items-center gap-2.5 shrink-0">
+                <button type="button" data-action="open-report" class="min-h-[40px] rounded-xl bg-teal-700 px-4 py-2 text-xs font-bold text-white hover:bg-teal-800 whitespace-nowrap shrink-0">
+                  Informe PDF
+                </button>
+                <button type="button" data-action="sign-out" class="hidden sm:inline-flex min-h-[40px] items-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0">
+                  Salir
+                </button>
+              </div>
+            </div>
+          </header>
+
+          <main class="mx-auto w-full max-w-[1360px] flex-1 px-4 py-5 sm:px-6 lg:px-8">
+            <section aria-label="Resumen de guardia clínica" class="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6">
+              <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <div class="text-xs font-semibold text-teal-800">
+                    ${state.fromCache ? 'Sincronizando base de datos compartida...' : 'Base de datos compartida · Sincronizada en tiempo real'}
+                  </div>
+                  <h1 class="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Control de guardia clínica</h1>
+                  <p class="mt-0.5 text-sm text-slate-600">${esc(fmtDateEs(new Date()))} · ${esc(state.user.email)}</p>
+                </div>
+
+                <div class="flex flex-col gap-2.5 sm:flex-row sm:items-stretch">
+                  <div class="rounded-xl border border-teal-200 bg-teal-50/60 px-4 py-2.5">
+                    <div class="text-[11px] font-bold text-teal-800">Encargado de turno permanente</div>
+                    <div class="mt-0.5 text-sm font-bold text-slate-900">${DEFAULT_SHIFT_SUPERVISOR}</div>
+                  </div>
+                  ${admin ? `
+                    <button type="button" data-action="open-clear-modal" ${state.patients.length === 0 ? 'disabled' : ''}
+                      class="min-h-[44px] rounded-xl border border-red-300 bg-white px-4 py-2 text-xs font-semibold text-red-800 hover:bg-red-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400 whitespace-nowrap shrink-0">
+                      Eliminar todos los registros
+                    </button>` : ''}
+                </div>
+              </div>
+
+              <div class="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
+                <div class="rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5"><div class="text-xs font-semibold text-slate-600">Total</div><div class="mt-0.5 font-display text-2xl font-bold tabular-nums text-slate-900">${c.total}</div></div>
+                <div class="rounded-xl border border-amber-200 bg-amber-50/50 px-3.5 py-2.5"><div class="text-xs font-semibold text-amber-900">Activos</div><div class="mt-0.5 font-display text-2xl font-bold tabular-nums text-amber-900">${c.enAtencion}</div></div>
+                <div class="rounded-xl border border-emerald-200 bg-emerald-50/50 px-3.5 py-2.5"><div class="text-xs font-semibold text-emerald-900">Atendidos</div><div class="mt-0.5 font-display text-2xl font-bold tabular-nums text-emerald-800">${c.atendidos}</div></div>
+                <div class="rounded-xl border border-orange-200 bg-orange-50/50 px-3.5 py-2.5"><div class="text-xs font-semibold text-orange-900">No esperó</div><div class="mt-0.5 font-display text-2xl font-bold tabular-nums text-orange-800">${c.noEsperoTurno}</div></div>
+                <div class="rounded-xl border border-red-200 bg-red-50/50 px-3.5 py-2.5"><div class="text-xs font-semibold text-red-900">No atendidos</div><div class="mt-0.5 font-display text-2xl font-bold tabular-nums text-red-800">${c.noAtendidos}</div></div>
+                <div class="rounded-xl border border-blue-200 bg-blue-50/50 px-3.5 py-2.5"><div class="text-xs font-semibold text-blue-900">Trasladados</div><div class="mt-0.5 font-display text-2xl font-bold tabular-nums text-blue-800">${c.trasladados}</div></div>
+              </div>
+
+              <div class="mt-5 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                <button type="button" data-action="nav" data-view="pacientes"
+                  class="min-h-[48px] rounded-xl border px-5 py-3 text-sm font-bold transition-colors tabular-nums ${
+                    state.activeView === 'pacientes' ? 'border-teal-700 bg-teal-700 text-white' : 'border-slate-300 bg-white text-slate-800 hover:border-teal-600 hover:bg-teal-50/60'
+                  }">
+                  PACIENTES (${c.total})
+                </button>
+                <button type="button" data-action="nav" data-view="entrada"
+                  class="min-h-[48px] rounded-xl border px-5 py-3 text-sm font-bold transition-colors ${
+                    state.activeView === 'entrada' ? 'border-teal-700 bg-teal-700 text-white' : 'border-slate-300 bg-white text-slate-800 hover:border-teal-600 hover:bg-teal-50/60'
+                  }">
+                  ${state.editingPatientId && state.activeView === 'entrada' ? 'EDITAR REGISTRO DE PACIENTE' : 'FORMATO DE ENTRADA'}
+                </button>
+              </div>
+            </section>
+
+            ${state.conflictNotice ? `
+              <div role="alert" class="mt-4 flex flex-col gap-2 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 sm:flex-row sm:items-center sm:justify-between">
+                <span class="font-medium">${esc(state.conflictNotice)}</span>
+                <button type="button" data-action="dismiss-conflict" class="rounded-lg border border-amber-400 bg-white px-3 py-1.5 text-xs font-bold text-amber-950">Entendido</button>
+              </div>` : ''}
+
+            ${state.runtimeError ? `
+              <div role="alert" class="mt-4 rounded-xl border border-red-300 bg-red-50 p-4 text-sm font-medium text-red-900">${esc(state.runtimeError)}</div>` : ''}
+
+            <div class="mt-6">
+              ${state.activeView === 'entrada' ? renderIntakeView() : state.activeView === 'seguridad' ? renderSecurityView() : renderPatientsView()}
+            </div>
+          </main>
+
+          <footer class="mt-8 border-t border-slate-200 bg-white">
+            <div class="mx-auto flex max-w-[1360px] flex-col gap-1 px-4 py-4 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
+              <span>ACE-MED · Encargado de turno: <strong>${DEFAULT_SHIFT_SUPERVISOR}</strong></span>
+              <span>No diagnostica, no recomienda tratamientos ni sustituye el criterio clínico.</span>
+            </div>
+          </footer>
+
+          <nav aria-label="Navegación móvil" class="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 backdrop-blur-sm md:hidden">
+            <div class="grid grid-cols-4 gap-1 px-2 py-1.5">
+              <button type="button" data-action="nav" data-view="pacientes" class="min-h-[48px] rounded-lg text-[11px] font-bold ${state.activeView === 'pacientes' ? 'bg-teal-50 text-teal-800' : 'text-slate-600'}">Pacientes</button>
+              <button type="button" data-action="nav" data-view="entrada" class="min-h-[48px] rounded-lg text-[11px] font-bold ${state.activeView === 'entrada' ? 'bg-teal-50 text-teal-800' : 'text-slate-600'}">Entrada</button>
+              <button type="button" data-action="open-report" class="min-h-[48px] rounded-lg text-[11px] font-bold text-slate-600">Informe</button>
+              <button type="button" data-action="nav" data-view="seguridad" class="min-h-[48px] rounded-lg text-[11px] font-bold ${state.activeView === 'seguridad' ? 'bg-teal-50 text-teal-800' : 'text-slate-600'}">Seguridad</button>
+            </div>
+          </nav>
+
+          ${renderModals()}
+        </div>`;
+    }
+
+    // =========================================================================
+    // 10. DELEGACIÓN DE EVENTOS INTERACTIVOS
+    // =========================================================================
+    async function submitIntakeForm(openWhatsApp) {
+      if (!state.intakeForm) return;
+      const f = state.intakeForm;
+      state.formError = '';
+      state.isSaving = true;
+      render();
+      try {
+        if (state.editingPatientId) {
+          const existing = state.patients.find((p) => p.id === state.editingPatientId);
+          if (!existing) throw new Error('CONFLICT:El paciente ya no existe en la base compartida.');
+          await updatePatientCloud(existing, f);
+          const id = existing.id;
+          state.editingPatientId = null;
+          state.intakeForm = null;
+          state.activeView = 'pacientes';
+          showToast('Registro actualizado y sincronizado.');
+          if (openWhatsApp) state.whatsappModal = { patientId: id, type: hasExit(f) ? 'salida' : 'ingreso' };
+        } else {
+          const newId = await createPatientCloud(f);
+          state.intakeForm = null;
+          state.activeView = 'pacientes';
+          showToast('Paciente registrado y sincronizado en tiempo real.');
+          if (openWhatsApp) state.whatsappModal = { patientId: newId, type: 'ingreso' };
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'No se pudo guardar el registro.';
+        if (msg.startsWith('CONFLICT:')) {
+          state.conflictNotice = msg.slice('CONFLICT:'.length);
+          state.editingPatientId = null;
+          state.activeView = 'pacientes';
+        } else {
+          state.formError = 'Error al guardar en la nube. Verifica tu conexión.';
+        }
+      } finally {
+        state.isSaving = false;
+        render();
+      }
+    }
+
+    document.addEventListener('submit', (e) => {
+      if (e.target && e.target.id === 'intake-form') {
+        e.preventDefault();
+        void submitIntakeForm(false);
+      }
+    });
+
+    document.addEventListener('input', (e) => {
+      const target = e.target;
+      if (!(target instanceof HTMLElement)) return;
+
+      if (target.id === 'patient-search') {
+        state.searchQuery = target.value;
+        const pos = target.selectionStart;
+        render();
+        const el = document.getElementById('patient-search');
+        if (el) { el.focus(); if (pos !== null) el.setSelectionRange(pos, pos); }
+        return;
+      }
+
+      if (target.dataset.intakeField && state.intakeForm) {
+        state.intakeForm[target.dataset.intakeField] = target.value;
+        return;
+      }
+
+      if (target.dataset.dischargeField && state.dischargeModal) {
+        state.dischargeModal[target.dataset.dischargeField] = target.value;
+        if (target.dataset.dischargeField === 'doctorName' || target.dataset.dischargeField === 'nurseName') {
+          const pos = target.selectionStart;
+          const id = target.id;
+          render();
+          const el = document.getElementById(id);
+          if (el) { el.focus(); if (pos !== null) el.setSelectionRange(pos, pos); }
+        }
+        return;
+      }
+
+      if (target.id === 'clear-phrase' && state.clearModal) {
+        state.clearModal.phrase = target.value;
+        const pos = target.selectionStart;
+        render();
+        const el = document.getElementById('clear-phrase');
+        if (el) { el.focus(); if (pos !== null) el.setSelectionRange(pos, pos); }
+      }
+    });
+
+    document.addEventListener('change', async (e) => {
+      const target = e.target;
+      if (!(target instanceof HTMLElement)) return;
+
+      if (target.dataset.timePart) {
+        const [prefix, part] = target.dataset.timePart.split(':');
+        const current = prefix === 'intake-entrada' ? state.intakeForm?.horaEntrada : state.dischargeModal?.horaSalida;
+        const cur = parse24To12(current || nowTime24());
+        cur[part] = target.value;
+        const next24 = to24From12(cur.h || '12', cur.m || '00', cur.p || 'AM');
+        if (prefix === 'intake-entrada' && state.intakeForm) state.intakeForm.horaEntrada = next24;
+        if (prefix === 'discharge-salida' && state.dischargeModal) state.dischargeModal.horaSalida = next24;
+        render();
+        return;
+      }
+
+      if (target.dataset.dischargeField === 'doctorTitle' && state.dischargeModal) {
+        state.dischargeModal.doctorTitle = target.value === 'DRA.' ? 'DRA.' : 'DR.';
+        render();
+        return;
+      }
+
+      if (target.dataset.action === 'toggle-wa-empty') {
+        const checked = target.checked;
+        state.shiftConfig.incluirCamposVaciosEnMensaje = checked;
+        render();
+        await saveShiftConfigCloud({ incluirCamposVaciosEnMensaje: checked });
+        return;
+      }
+
+      if (target.dataset.action === 'clear-toggle-check' && state.clearModal) {
+        state.clearModal.checked = target.checked;
+        render();
+        return;
+      }
+
+      if (target.dataset.action === 'select-request-role' && target.dataset.uid) {
+        state.requestRoleDrafts[target.dataset.uid] = target.value === 'admin' ? 'admin' : 'staff';
+        return;
+      }
+
+      if (target.dataset.action === 'change-staff-role' && target.dataset.uid && isPrimaryAdmin()) {
+        const u = state.staffUsers.find((x) => x.uid === target.dataset.uid);
+        if (u) {
+          const nextRole = target.value === 'admin' ? 'admin' : 'staff';
+          state.accessBusyKey = u.uid; state.accessPanelNotice = null; render();
+          try {
+            await updateStaffAccessCloud(u, true, nextRole);
+            const msg = `Se actualizó el rol de ${u.email} a ${nextRole === 'admin' ? 'Administrador' : 'Personal'}.`;
+            state.accessPanelNotice = { type: 'ok', text: msg };
+            showToast(msg);
+          } catch {
+            state.accessPanelNotice = { type: 'error', text: 'No se pudo actualizar el rol de la cuenta.' };
+          } finally {
+            state.accessBusyKey = ''; render();
+          }
+        }
+        return;
+      }
+
+      if (target.id === 'restore-json-input' && target.files?.[0]) {
+        try {
+          const text = await target.files[0].text();
+          const parsed = JSON.parse(text);
+          const records = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.patients) ? parsed.patients : [];
+          if (!records.length) { showToast('El archivo no contiene registros válidos.'); return; }
+          const { imported, skipped } = await importBatchToCloud(records, 'restore_backup');
+          showToast(`Restauración lista: ${imported} agregados${skipped ? ` (${skipped} duplicados omitidos)` : ''}.`);
+        } catch {
+          showToast('No se pudo leer el archivo JSON de respaldo.');
+        } finally {
+          target.value = '';
+        }
+      }
+    });
+
+    document.addEventListener('click', async (e) => {
+      const btn = e.target instanceof Element ? e.target.closest('[data-action]') : null;
+      if (!btn) return;
+      const action = btn.dataset.action;
+
+      switch (action) {
+        case 'sign-in': {
+          state.isSigningIn = true; state.authError = ''; render();
+          try {
+            await signInWithPopup(auth, googleProvider);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : '';
+            if (msg.includes('unauthorized-domain')) {
+              state.authError = 'Dominio no autorizado en Firebase. Agrega tu dominio de GitHub Pages en Firebase Console → Authentication → Settings → Authorized domains.';
+            } else if (msg.includes('popup-closed-by-user')) {
+              state.authError = 'Se cerró la ventana de Google antes de completar el inicio de sesión.';
+            } else {
+              state.authError = 'No se pudo iniciar sesión con Google. Intenta de nuevo.';
+            }
+          } finally {
+            state.isSigningIn = false; render();
+          }
+          break;
+        }
+        case 'sign-out':
+          stopVoice();
+          await signOut(auth);
+          break;
+        case 'nav': {
+          const view = btn.dataset.view;
+          if (view === 'entrada') openNewIntakeForm();
+          else { stopVoice(); state.editingPatientId = null; state.activeView = view; render(); }
+          break;
+        }
+        case 'go-entrada':
+          openNewIntakeForm();
+          break;
+        case 'clear-search':
+          state.searchQuery = ''; render(); break;
+        case 'filter-status':
+          state.statusFilter = btn.dataset.status || 'todos'; render(); break;
+        case 'reset-filters':
+          state.searchQuery = ''; state.statusFilter = 'todos'; render(); break;
+        case 'dismiss-conflict':
+          state.conflictNotice = ''; render(); break;
+        case 'set-tratamiento':
+          if (state.intakeForm) { state.intakeForm.tratamiento = btn.dataset.val || 'paciente'; render(); }
+          break;
+        case 'time-now': {
+          const now = nowTime24();
+          if (btn.dataset.prefix === 'intake-entrada' && state.intakeForm) state.intakeForm.horaEntrada = now;
+          if (btn.dataset.prefix === 'discharge-salida' && state.dischargeModal) state.dischargeModal.horaSalida = now;
+          render();
+          break;
+        }
+        case 'append-suggestion': {
+          const field = btn.dataset.target;
+          const txt = btn.dataset.text || '';
+          if (state.intakeForm && field) {
+            const cur = (state.intakeForm[field] || '').trim();
+            state.intakeForm[field] = cur ? `${cur}, ${txt.toLowerCase()}` : txt;
+            render();
+          }
+          break;
+        }
+        case 'voice': {
+          const vKey = btn.dataset.voiceKey || '';
+          const [scope, field] = vKey.split(':');
+          toggleVoice(vKey, (spoken) => {
+            if (scope === 'intake' && state.intakeForm) {
+              const cur = (state.intakeForm[field] || '').trim();
+              state.intakeForm[field] = cur ? `${cur} ${spoken}` : spoken;
+            } else if (scope === 'discharge' && state.dischargeModal) {
+              const cur = (state.dischargeModal[field] || '').trim();
+              state.dischargeModal[field] = cur ? `${cur} ${spoken}` : spoken;
+            }
+          });
+          break;
+        }
+        case 'spellcheck-intake': {
+          if (!state.intakeForm) break;
+          const f = state.intakeForm;
+          const proposals = [
+            reviewTextField('nombre', 'Nombre', f.nombre),
+            reviewTextField('edad', 'Edad', f.edad),
+            reviewTextField('procedencia', 'Procedencia', f.procedencia),
+            reviewTextField('motivoVisita', 'Motivo de visita', f.motivoVisita),
+            reviewTextField('observaciones', 'Observaciones de ingreso', f.observaciones)
+          ];
+          state.spellModal = {
+            proposals,
+            onApply: () => {
+              for (const p of proposals) if (p.changed && state.intakeForm) state.intakeForm[p.field] = p.proposed;
+              showToast('Ortografía rectificada.');
+            }
+          };
+          render();
+          break;
+        }
+        case 'spellcheck-discharge': {
+          if (!state.dischargeModal) break;
+          const dm = state.dischargeModal;
+          const proposals = [
+            reviewTextField('medico', 'Médico', dm.doctorName),
+            reviewTextField('enfermera', 'Enfermera', dm.nurseName),
+            reviewTextField('diagnostico', 'Diagnóstico', dm.diagnostico),
+            reviewTextField('observacionesSalida', 'Observaciones de salida', dm.observacionesSalida)
+          ];
+          state.spellModal = {
+            proposals,
+            onApply: () => {
+              for (const p of proposals) {
+                if (!p.changed || !state.dischargeModal) continue;
+                if (p.field === 'medico') state.dischargeModal.doctorName = stripDoctorPrefix(p.proposed);
+                else if (p.field === 'enfermera') state.dischargeModal.nurseName = stripNursePrefix(p.proposed);
+                else state.dischargeModal[p.field] = p.proposed;
+              }
+              showToast('Ortografía de salida rectificada.');
+            }
+          };
+          render();
+          break;
+        }
+        case 'apply-spell':
+          if (state.spellModal) { state.spellModal.onApply(); state.spellModal = null; render(); }
+          break;
+        case 'close-spell':
+          state.spellModal = null; render(); break;
+        case 'save-intake-wa':
+          await submitIntakeForm(true); break;
+        case 'cancel-intake':
+          stopVoice(); state.editingPatientId = null; state.intakeForm = null; state.activeView = 'pacientes'; render(); break;
+        case 'edit-patient': {
+          const p = state.patients.find((x) => x.id === btn.dataset.id);
+          if (p) openEditIntakeForm(p);
+          break;
+        }
+        case 'ask-delete-one':
+          state.deleteConfirmPatientId = btn.dataset.id; render(); break;
+        case 'cancel-delete-one':
+          state.deleteConfirmPatientId = null; render(); break;
+        case 'confirm-delete-one': {
+          const p = state.patients.find((x) => x.id === btn.dataset.id);
+          state.deleteConfirmPatientId = null;
+          if (p) { await deleteSinglePatientCloud(p); showToast('Registro eliminado de la base compartida.'); }
+          render();
+          break;
+        }
+        case 'open-discharge': {
+          const p = state.patients.find((x) => x.id === btn.dataset.id);
+          if (p) openDischargeModal(p);
+          break;
+        }
+        case 'close-discharge':
+          stopVoice(); state.dischargeModal = null; render(); break;
+        case 'set-discharge-outcome':
+          if (state.dischargeModal) { state.dischargeModal.estadoEgreso = btn.dataset.val; render(); }
+          break;
+        case 'save-discharge': {
+          if (!state.dischargeModal) break;
+          const dm = state.dischargeModal;
+          const p = state.patients.find((x) => x.id === dm.patientId);
+          if (!p) { state.dischargeModal = null; render(); break; }
+          state.isSaving = true; render();
+          try {
+            await registerDischargeCloud(p, {
+              horaSalida: dm.horaSalida,
+              estadoEgreso: dm.estadoEgreso,
+              observacionesSalida: dm.observacionesSalida,
+              medico: formatDoctor(dm.doctorTitle, dm.doctorName),
+              enfermera: formatNurse(dm.nurseName),
+              diagnostico: dm.diagnostico
+            });
+            const openWa = btn.dataset.openWa === '1';
+            const pid = p.id;
+            state.dischargeModal = null;
+            showToast('Salida registrada y sincronizada en tiempo real.');
+            if (openWa) state.whatsappModal = { patientId: pid, type: 'salida' };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : '';
+            if (msg.startsWith('CONFLICT:')) {
+              state.conflictNotice = msg.slice('CONFLICT:'.length);
+              state.dischargeModal = null;
+            } else {
+              dm.error = 'No se pudo guardar la salida. Intenta nuevamente.';
+            }
+          } finally {
+            state.isSaving = false; render();
+          }
+          break;
+        }
+        case 'open-whatsapp':
+          state.whatsappModal = { patientId: btn.dataset.id, type: btn.dataset.type === 'salida' ? 'salida' : 'ingreso' };
+          render();
+          break;
+        case 'close-whatsapp':
+          state.whatsappModal = null; render(); break;
+        case 'copy-wa-text': {
+          const el = document.getElementById('wa-preview-text');
+          if (el) {
+            await navigator.clipboard.writeText(el.textContent || '');
+            showToast('Mensaje copiado. Pégalo en el grupo de WhatsApp.');
+          }
+          break;
+        }
+        case 'open-report':
+          state.reportModalOpen = true; render(); break;
+        case 'close-report':
+          state.reportModalOpen = false; render(); break;
+        case 'save-wa-group': {
+          const inp = document.getElementById('wa-group-url');
+          const url = inp ? inp.value.trim() : '';
+          if (url && !/^https:\/\/(chat\.whatsapp\.com|wa\.me)\//i.test(url)) {
+            showToast('Ingresa un enlace válido de WhatsApp (https://chat.whatsapp.com/...).');
+            break;
+          }
+          await saveShiftConfigCloud({ whatsappGroupUrl: url || DEFAULT_WHATSAPP_GROUP_URL });
+          showToast('Enlace del grupo actualizado y sincronizado.');
+          break;
+        }
+        case 'copy-shift-summary':
+          await navigator.clipboard.writeText(buildShiftSummaryText(state.patients));
+          showToast('Resumen de guardia copiado al portapapeles.');
+          break;
+        case 'download-pdf':
+          generateShiftPdf(state.patients); break;
+        case 'export-json':
+          exportBackupJson(state.patients); break;
+        case 'open-clear-modal':
+          state.clearModal = { checked: false, phrase: '', busy: false, error: '' }; render(); break;
+        case 'close-clear':
+          state.clearModal = null; render(); break;
+        case 'execute-clear-all': {
+          if (!state.clearModal || !isAdmin()) break;
+          state.clearModal.busy = true; state.clearModal.error = ''; render();
+          try {
+            const removed = await deleteAllPatientsCloud(state.patients);
+            state.clearModal = null;
+            state.editingPatientId = null;
+            state.dischargeModal = null;
+            state.whatsappModal = null;
+            state.activeView = 'pacientes';
+            showToast(`Se eliminaron ${removed} registros y quedó registrado en auditoría.`);
+          } catch {
+            state.clearModal.busy = false;
+            state.clearModal.error = 'No se pudieron eliminar todos los registros.';
+          }
+          render();
+          break;
+        }
+        case 'submit-access-request': {
+          state.isSubmittingRequest = true; state.requestFeedback = null; render();
+          try {
+            await submitAccessRequestCloud();
+            state.requestFeedback = {
+              type: 'ok',
+              text: 'Tu solicitud de acceso fue enviada correctamente. Espera la autorización del administrador.'
+            };
+          } catch (err) {
+            state.requestFeedback = {
+              type: 'error',
+              text: err instanceof Error ? err.message : 'No se pudo enviar tu solicitud de acceso.'
+            };
+          } finally {
+            state.isSubmittingRequest = false; render();
+          }
+          break;
+        }
+        case 'set-access-subtab': {
+          state.accessSubTab = btn.dataset.tab === 'staff' ? 'staff' : 'requests';
+          render();
+          break;
+        }
+        case 'refresh-access-requests': {
+          await refreshAccessRequestsFromServer();
+          break;
+        }
+        case 'approve-access-request': {
+          if (!isPrimaryAdmin()) break;
+          const req = state.accessRequests.find((r) => r.uid === btn.dataset.uid);
+          if (req) {
+            const role = state.requestRoleDrafts[req.uid] === 'admin' ? 'admin' : 'staff';
+            state.accessBusyKey = req.uid; state.accessPanelNotice = null; render();
+            try {
+              await approveAccessRequestCloud(req, role);
+              const msg = `Solicitud aprobada: ${req.email} agregado como ${role === 'admin' ? 'Administrador' : 'Personal'}.`;
+              state.accessPanelNotice = { type: 'ok', text: msg };
+              showToast(msg);
+            } catch {
+              state.accessPanelNotice = { type: 'error', text: 'No se pudo aprobar la solicitud de acceso.' };
+            } finally {
+              state.accessBusyKey = ''; render();
+            }
+          }
+          break;
+        }
+        case 'reject-access-request': {
+          if (!isPrimaryAdmin()) break;
+          const req = state.accessRequests.find((r) => r.uid === btn.dataset.uid);
+          if (req) {
+            state.accessBusyKey = req.uid; state.accessPanelNotice = null; render();
+            try {
+              await rejectAccessRequestCloud(req);
+              const msg = `Solicitud rechazada para ${req.email}.`;
+              state.accessPanelNotice = { type: 'ok', text: msg };
+              showToast(msg);
+            } catch {
+              state.accessPanelNotice = { type: 'error', text: 'No se pudo rechazar la solicitud de acceso.' };
+            } finally {
+              state.accessBusyKey = ''; render();
+            }
+          }
+          break;
+        }
+        case 'revoke-staff-access': {
+          if (!isPrimaryAdmin()) break;
+          const u = state.staffUsers.find((x) => x.uid === btn.dataset.uid);
+          if (u) {
+            state.accessBusyKey = u.uid; state.accessPanelNotice = null; render();
+            try {
+              await updateStaffAccessCloud(u, false, u.role);
+              const msg = `Se revocó el acceso de ${u.email}.`;
+              state.accessPanelNotice = { type: 'ok', text: msg };
+              showToast(msg);
+            } catch {
+              state.accessPanelNotice = { type: 'error', text: 'No se pudo revocar el acceso.' };
+            } finally {
+              state.accessBusyKey = ''; render();
+            }
+          }
+          break;
+        }
+      }
+    });
+
+    render();
+  </script>
+</body>
+</html>
