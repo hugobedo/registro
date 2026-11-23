@@ -32,6 +32,7 @@ interface DischargeModalProps {
     updates: {
       horaSalida: string;
       estadoEgreso: ExitOutcome;
+      destinoTraslado?: string;
       observacionesSalida: string;
       medico: string;
       enfermera: string;
@@ -67,6 +68,7 @@ export function DischargeModal({
     alreadyExited ? patient.observacionesSalida || '' : ''
   );
 
+  const [destinoTraslado, setDestinoTraslado] = useState(patient.destinoTraslado || '');
   const [doctorTitle, setDoctorTitle] = useState<DoctorTitle>(() =>
     detectDoctorTitle(patient.medico, 'DR.')
   );
@@ -91,6 +93,7 @@ export function DischargeModal({
       {
         horaSalida: normalizeTime24h(horaSalida),
         estadoEgreso,
+        destinoTraslado: estadoEgreso === 'trasladado' ? destinoTraslado.trim() : '',
         observacionesSalida,
         medico: finalMedico,
         enfermera: finalEnfermera,
@@ -101,22 +104,27 @@ export function DischargeModal({
   };
 
   const handleSpellCheck = () => {
-    onRequestSpellCheck(
-      {
-        observacionesSalida,
-        medico: formattedMedicoPreview || medico,
-        enfermera: formattedEnfermeraPreview || enfermera,
-        diagnostico,
-      },
-      (corrected) => {
-        if (typeof corrected.observacionesSalida === 'string') {
-          setObservacionesSalida(corrected.observacionesSalida);
-        }
-        if (typeof corrected.medico === 'string') setMedico(corrected.medico);
-        if (typeof corrected.enfermera === 'string') setEnfermera(corrected.enfermera);
-        if (typeof corrected.diagnostico === 'string') setDiagnostico(corrected.diagnostico);
+    const fieldsToCheck: Partial<Record<ReviewableFieldKey, string>> = {
+      observacionesSalida,
+      medico: formattedMedicoPreview || medico,
+      enfermera: formattedEnfermeraPreview || enfermera,
+      diagnostico,
+    };
+    if (estadoEgreso === 'trasladado' && destinoTraslado.trim()) {
+      fieldsToCheck.destinoTraslado = destinoTraslado;
+    }
+
+    onRequestSpellCheck(fieldsToCheck, (corrected) => {
+      if (typeof corrected.destinoTraslado === 'string') {
+        setDestinoTraslado(corrected.destinoTraslado);
       }
-    );
+      if (typeof corrected.observacionesSalida === 'string') {
+        setObservacionesSalida(corrected.observacionesSalida);
+      }
+      if (typeof corrected.medico === 'string') setMedico(corrected.medico);
+      if (typeof corrected.enfermera === 'string') setEnfermera(corrected.enfermera);
+      if (typeof corrected.diagnostico === 'string') setDiagnostico(corrected.diagnostico);
+    });
   };
 
   const treatmentLabel = getTreatmentHeader(patient.tratamiento);
@@ -236,6 +244,39 @@ export function DischargeModal({
               })}
             </div>
           </div>
+
+          {/* Destino del traslado (visible solo cuando el egreso es traslado) */}
+          {estadoEgreso === 'trasladado' && (
+            <div>
+              <div className="flex items-center justify-between gap-2">
+                <label
+                  htmlFor="modal-destinoTraslado"
+                  className="block text-sm font-semibold text-slate-800"
+                >
+                  {FIELD_LABELS.destinoTraslado}
+                </label>
+                <VoiceMicButton
+                  fieldLabel="Destino del traslado"
+                  isActive={voice.activeFieldId === 'discharge_destino'}
+                  isSupported={voice.isSupported}
+                  onClick={() =>
+                    voice.toggleDictation('discharge_destino', (transcript) =>
+                      setDestinoTraslado((prev) => appendDictatedText(prev, transcript))
+                    )
+                  }
+                />
+              </div>
+              <input
+                id="modal-destinoTraslado"
+                type="text"
+                value={destinoTraslado}
+                onChange={(e) => setDestinoTraslado(e.target.value)}
+                placeholder="Ej. Hospital General, Clínica, unidad receptora (opcional)"
+                autoComplete="off"
+                className="mt-1.5 min-h-[46px] w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700"
+              />
+            </div>
+          )}
 
           {/* Hora de salida */}
           <div>

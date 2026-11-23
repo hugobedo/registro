@@ -66,6 +66,13 @@ function getOutcomePdfStyle(outcome: PatientOutcome): OutcomeVisualStyle {
         fillRgb: [239, 246, 255],
         borderRgb: [147, 197, 253],
       };
+    case 'hospitalizado':
+      return {
+        badgeText: 'HOSPITALIZACIÓN',
+        textRgb: [67, 56, 202],
+        fillRgb: [238, 242, 255],
+        borderRgb: [165, 180, 252],
+      };
     default:
       return {
         badgeText: 'ACTIVO — EN ATENCIÓN',
@@ -141,20 +148,26 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
   doc.text(wrappedSupervisor, PAGE_MARGIN_X + 33, cursorY + 4.5);
   cursorY += 4.5 + wrappedSupervisor.length * 4 + 2.5;
 
-  // Cuadro superior de totales diferenciados (2 filas x 3 columnas)
+  // Cuadro superior de totales diferenciados (2 filas x 4 columnas)
   const statBoxHeight = 16;
   doc.setFillColor(248, 250, 252);
   doc.setDrawColor(203, 213, 225);
   doc.setLineWidth(0.3);
   doc.roundedRect(PAGE_MARGIN_X, cursorY, contentWidth, statBoxHeight, 1.5, 1.5, 'FD');
 
-  const colW = contentWidth / 3;
+  const colW = contentWidth / 4;
   doc.setDrawColor(226, 232, 240);
   doc.line(PAGE_MARGIN_X + colW, cursorY + 1.5, PAGE_MARGIN_X + colW, cursorY + statBoxHeight - 1.5);
   doc.line(
     PAGE_MARGIN_X + colW * 2,
     cursorY + 1.5,
     PAGE_MARGIN_X + colW * 2,
+    cursorY + statBoxHeight - 1.5
+  );
+  doc.line(
+    PAGE_MARGIN_X + colW * 3,
+    cursorY + 1.5,
+    PAGE_MARGIN_X + colW * 3,
     cursorY + statBoxHeight - 1.5
   );
   doc.line(
@@ -174,14 +187,15 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
     { label: 'Total:', value: counts.total, rgb: [15, 23, 42], row: 0, col: 0 },
     { label: 'Activos:', value: counts.enAtencion, rgb: [146, 64, 14], row: 0, col: 1 },
     { label: 'Atendidos:', value: counts.atendidos, rgb: [4, 120, 87], row: 0, col: 2 },
+    { label: 'Hospitalización:', value: counts.hospitalizados, rgb: [67, 56, 202], row: 0, col: 3 },
     { label: 'No esperó:', value: counts.noEsperoTurno, rgb: [154, 52, 18], row: 1, col: 0 },
     { label: 'No atendidos:', value: counts.noAtendidos, rgb: [185, 28, 28], row: 1, col: 1 },
     { label: 'Trasladados:', value: counts.trasladados, rgb: [29, 78, 216], row: 1, col: 2 },
   ];
 
-  doc.setFontSize(8.2);
+  doc.setFontSize(8);
   for (const cell of statsCells) {
-    const x = PAGE_MARGIN_X + cell.col * colW + 3;
+    const x = PAGE_MARGIN_X + cell.col * colW + 2.5;
     const y = cursorY + (cell.row === 0 ? 5.3 : 13.2);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(71, 85, 105);
@@ -189,7 +203,7 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
 
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(...cell.rgb);
-    doc.text(String(cell.value), PAGE_MARGIN_X + (cell.col + 1) * colW - 3.5, y, {
+    doc.text(String(cell.value), PAGE_MARGIN_X + (cell.col + 1) * colW - 2.5, y, {
       align: 'right',
     });
   }
@@ -243,6 +257,9 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
     const clinicalParts: string[] = [];
     if (patient.motivoVisita.trim()) {
       clinicalParts.push(`${FIELD_LABELS.motivoVisita}: ${patient.motivoVisita.trim()}`);
+    }
+    if (patient.destinoTraslado.trim()) {
+      clinicalParts.push(`${FIELD_LABELS.destinoTraslado}: ${patient.destinoTraslado.trim()}`);
     }
     if (patient.observaciones.trim()) {
       clinicalParts.push(
@@ -358,7 +375,7 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
     doc.setFontSize(7.5);
     doc.setTextColor(100, 116, 139);
     doc.text(
-      `ACE-MED · Encargado: ${supervisorName} · ${getOutcomeLabel('atendido')}: ${counts.atendidos} | No esperó: ${counts.noEsperoTurno} | No atendido: ${counts.noAtendidos} | Trasladado: ${counts.trasladados} | Activos: ${counts.enAtencion}`,
+      `ACE-MED · ${getOutcomeLabel('atendido')}: ${counts.atendidos} | Hosp.: ${counts.hospitalizados} | No esperó: ${counts.noEsperoTurno} | No atend.: ${counts.noAtendidos} | Trasl.: ${counts.trasladados} | Activos: ${counts.enAtencion}`,
       PAGE_MARGIN_X,
       pageHeight - 6
     );

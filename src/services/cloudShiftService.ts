@@ -102,6 +102,7 @@ function mapDocToPatient(id: string, data: Record<string, unknown>): PatientReco
     horaEntrada: typeof data.horaEntrada === 'string' ? data.horaEntrada : '',
     horaSalida,
     estadoEgreso: parseOutcome(data.estadoEgreso, horaSalida),
+    destinoTraslado: typeof data.destinoTraslado === 'string' ? data.destinoTraslado : '',
     tratamiento: parseTreatment(data.tratamiento),
     nombre: typeof data.nombre === 'string' ? data.nombre : '',
     edad: typeof data.edad === 'string' ? data.edad : '',
@@ -766,6 +767,7 @@ export async function createPatientInCloud(
     horaEntrada: clampStr(values.horaEntrada, 10),
     horaSalida: clampStr(values.horaSalida, 10),
     estadoEgreso: values.estadoEgreso,
+    destinoTraslado: clampStr(values.destinoTraslado, 200),
     tratamiento: values.tratamiento,
     nombre: clampStr(values.nombre, 200),
     edad: clampStr(values.edad, 60),
@@ -834,6 +836,7 @@ export async function updatePatientInCloud(
         horaEntrada: clampStr(values.horaEntrada, 10),
         horaSalida: clampStr(values.horaSalida, 10),
         estadoEgreso: values.estadoEgreso,
+        destinoTraslado: clampStr(values.destinoTraslado, 200),
         tratamiento: values.tratamiento,
         nombre: clampStr(values.nombre, 200),
         edad: clampStr(values.edad, 60),
@@ -872,6 +875,7 @@ export async function registerDischargeInCloud(
   updates: {
     horaSalida: string;
     estadoEgreso: ExitOutcome;
+    destinoTraslado?: string;
     observacionesSalida: string;
     medico: string;
     enfermera: string;
@@ -882,6 +886,12 @@ export async function registerDischargeInCloud(
   const path = `patients/${existingPatient.id}`;
   const ref = doc(db, 'patients', existingPatient.id);
   const nowIso = new Date().toISOString();
+  const nextDestino = clampStr(
+    updates.destinoTraslado !== undefined
+      ? updates.destinoTraslado
+      : existingPatient.destinoTraslado || '',
+    200
+  );
 
   try {
     await runTransaction(db, async (tx) => {
@@ -895,13 +905,14 @@ export async function registerDischargeInCloud(
         typeof snap.data().version === 'number' ? (snap.data().version as number) : 1;
       if (currentVersion !== existingPatient.version) {
         throw new ConcurrencyConflictError(
-          'Otro dispositivo actualizó este paciente hace unos instantes. Revisa la versión actualizada antes de registrar la salida.'
+          'Otro dispositivo actualizó este paciente hace unos instantes. Revisa la versión actualizada antes de guardar.'
         );
       }
 
       tx.update(ref, {
         horaSalida: clampStr(updates.horaSalida, 10),
         estadoEgreso: updates.estadoEgreso,
+        destinoTraslado: nextDestino,
         observacionesSalida: clampStr(updates.observacionesSalida, 1500),
         medico: clampStr(updates.medico, 200),
         enfermera: clampStr(updates.enfermera, 200),
@@ -914,10 +925,19 @@ export async function registerDischargeInCloud(
       });
     });
 
+    const patientLabel = existingPatient.nombre || 'paciente';
+    const timeSuffix = updates.horaSalida.trim() ? ` a las ${updates.horaSalida.trim()}` : '';
+    let auditSummary = `Registró salida (${updates.estadoEgreso}) de ${patientLabel}${timeSuffix}`;
+    if (updates.estadoEgreso === 'hospitalizado') {
+      auditSummary = `Registró hospitalización de ${patientLabel}${timeSuffix}`;
+    } else if (updates.estadoEgreso === 'trasladado') {
+      auditSummary = `Registró traslado de ${patientLabel}${nextDestino ? ` a ${nextDestino}` : ''}${timeSuffix}`;
+    }
+
     await writeAuditLog({
       action: 'register_discharge',
       actor,
-      summary: `Registró salida (${updates.estadoEgreso}) de ${existingPatient.nombre || 'paciente'} a las ${updates.horaSalida}`,
+      summary: auditSummary,
       affectedCount: 1,
       patientId: existingPatient.id,
     });
@@ -1025,6 +1045,7 @@ export async function importPatientsBatchToCloud(
           horaEntrada: clampStr(item.horaEntrada, 10),
           horaSalida: clampStr(item.horaSalida, 10),
           estadoEgreso: parseOutcome(item.estadoEgreso, item.horaSalida),
+          destinoTraslado: clampStr(item.destinoTraslado || '', 200),
           tratamiento: parseTreatment(item.tratamiento),
           nombre: clampStr(item.nombre, 200),
           edad: clampStr(item.edad, 60),

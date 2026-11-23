@@ -53,6 +53,7 @@ export function buildIngresoMessage(
     { label: FIELD_LABELS.procedencia, value: patient.procedencia },
     { label: FIELD_LABELS.motivoVisita, value: patient.motivoVisita },
     { label: FIELD_LABELS.observaciones, value: patient.observaciones },
+    { label: FIELD_LABELS.destinoTraslado, value: patient.destinoTraslado },
   ];
 
   const body = buildFilledLines(lines);
@@ -77,6 +78,7 @@ export function buildSalidaMessage(
     { label: FIELD_LABELS.horaSalida, value: formatTime12h(patient.horaSalida) },
     { label: 'Fecha', value: formatIsoDateEs(patient.fechaRegistro) },
     { label: FIELD_LABELS.estadoEgreso, value: outcomeValue },
+    { label: FIELD_LABELS.destinoTraslado, value: patient.destinoTraslado },
     { label: getTreatmentHeader(patient.tratamiento), value: patient.nombre },
     { label: FIELD_LABELS.edad, value: patient.edad },
     { label: FIELD_LABELS.procedencia, value: patient.procedencia },
@@ -128,6 +130,7 @@ export function buildShiftReportWhatsAppMessage(
     `No esperó: ${counts.noEsperoTurno}`,
     `No atendidos: ${counts.noAtendidos}`,
     `Trasladados: ${counts.trasladados}`,
+    `Hospitalización: ${counts.hospitalizados}`,
   ];
 
   if (sortedAll.length > 0) {
@@ -157,6 +160,9 @@ export function buildShiftReportWhatsAppMessage(
       }
       if (patient.motivoVisita.trim()) {
         detailParts.push(`${FIELD_LABELS.motivoVisita}: ${patient.motivoVisita.trim()}`);
+      }
+      if (patient.destinoTraslado.trim()) {
+        detailParts.push(`${FIELD_LABELS.destinoTraslado}: ${patient.destinoTraslado.trim()}`);
       }
       if (patient.observaciones.trim()) {
         detailParts.push(`Obs. ingreso: ${patient.observaciones.trim()}`);

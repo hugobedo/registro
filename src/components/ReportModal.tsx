@@ -106,6 +106,7 @@ export function ReportModal({
               <div className="text-orange-800">No esperó: {counts.noEsperoTurno}</div>
               <div className="text-red-800">No atendidos: {counts.noAtendidos}</div>
               <div className="text-blue-800">Trasladados: {counts.trasladados}</div>
+              <div className="text-indigo-800">Hospitalización: {counts.hospitalizados}</div>
             </div>
           </div>
 

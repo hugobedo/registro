@@ -103,7 +103,11 @@
         },
         "estadoEgreso": {
           "type": "string",
-          "enum": ["en_atencion", "atendido", "no_espero_turno", "no_atendido", "trasladado"]
+          "enum": ["en_atencion", "atendido", "no_espero_turno", "no_atendido", "trasladado", "hospitalizado"]
+        },
+        "destinoTraslado": {
+          "type": "string",
+          "maxLength": 200
         },
         "tratamiento": {
           "type": "string",

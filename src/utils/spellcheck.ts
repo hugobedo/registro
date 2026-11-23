@@ -367,6 +367,7 @@ export function reviewFieldText(
     field === 'motivoVisita' ||
     field === 'observaciones' ||
     field === 'observacionesSalida' ||
+    field === 'destinoTraslado' ||
     field === 'diagnostico' ||
     field === 'procedencia'
   ) {
@@ -397,6 +398,7 @@ export function reviewMultipleFields(
     'motivoVisita',
     'observaciones',
     'observacionesSalida',
+    'destinoTraslado',
     'medico',
     'enfermera',
     'diagnostico',

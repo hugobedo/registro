@@ -4,7 +4,8 @@ export type ExitOutcome =
   | 'atendido'
   | 'no_espero_turno'
   | 'no_atendido'
-  | 'trasladado';
+  | 'trasladado'
+  | 'hospitalizado';
 
 export type PatientOutcome = 'en_atencion' | ExitOutcome;
 
@@ -36,6 +37,7 @@ export interface PatientRecord {
   horaEntrada: string;
   horaSalida: string;
   estadoEgreso: PatientOutcome;
+  destinoTraslado: string;
   tratamiento: TreatmentLabel;
   nombre: string;
   edad: string;
@@ -58,6 +60,7 @@ export interface PatientFormValues {
   horaEntrada: string;
   horaSalida: string;
   estadoEgreso: PatientOutcome;
+  destinoTraslado: string;
   tratamiento: TreatmentLabel;
   nombre: string;
   edad: string;
@@ -143,6 +146,7 @@ export type ReviewableFieldKey =
   | 'motivoVisita'
   | 'observaciones'
   | 'observacionesSalida'
+  | 'destinoTraslado'
   | 'medico'
   | 'enfermera'
   | 'diagnostico';
@@ -163,6 +167,7 @@ export interface ShiftCounts {
   noEsperoTurno: number;
   noAtendidos: number;
   trasladados: number;
+  hospitalizados: number;
   salidasTotales: number;
 }
 
@@ -171,7 +176,8 @@ export function isExitOutcome(value: unknown): value is ExitOutcome {
     value === 'atendido' ||
     value === 'no_espero_turno' ||
     value === 'no_atendido' ||
-    value === 'trasladado'
+    value === 'trasladado' ||
+    value === 'hospitalizado'
   );
 }
 
@@ -201,6 +207,7 @@ export function computeShiftCounts(patients: PatientRecord[]): ShiftCounts {
     noEsperoTurno: 0,
     noAtendidos: 0,
     trasladados: 0,
+    hospitalizados: 0,
     salidasTotales: 0,
   };
 
@@ -221,6 +228,10 @@ export function computeShiftCounts(patients: PatientRecord[]): ShiftCounts {
         break;
       case 'trasladado':
         counts.trasladados += 1;
+        counts.salidasTotales += 1;
+        break;
+      case 'hospitalizado':
+        counts.hospitalizados += 1;
         counts.salidasTotales += 1;
         break;
       default:

@@ -29,6 +29,7 @@ export const FIELD_LABELS = {
   horaEntrada: 'Hora de entrada',
   horaSalida: 'Hora de salida',
   estadoEgreso: 'Estado de egreso',
+  destinoTraslado: 'Destino del traslado',
   nombre: 'Nombre',
   edad: 'Edad',
   procedencia: PROCEDENCIA_LABEL,
@@ -91,6 +92,12 @@ export const EXIT_OUTCOME_OPTIONS: ReadonlyArray<{
     shortLabel: 'Trasladado',
     description: 'Referido o trasladado a otro centro o nivel de atención.',
   },
+  {
+    value: 'hospitalizado',
+    label: 'Hospitalización',
+    shortLabel: 'Hospitalización',
+    description: 'Ingresado a hospitalización bajo valoración médica.',
+  },
 ];
 
 export function getOutcomeLabel(outcome: PatientOutcome): string {
@@ -103,6 +110,8 @@ export function getOutcomeLabel(outcome: PatientOutcome): string {
       return 'No atendido';
     case 'trasladado':
       return 'Trasladado a otra unidad';
+    case 'hospitalizado':
+      return 'Hospitalización';
     default:
       return 'En atención (sin salida)';
   }

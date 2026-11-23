@@ -53,6 +53,7 @@ export function sanitizePatientRecord(raw: unknown): PatientRecord | null {
     horaEntrada: typeof item.horaEntrada === 'string' ? item.horaEntrada : '',
     horaSalida,
     estadoEgreso: resolveStoredOutcome(item.estadoEgreso, horaSalida),
+    destinoTraslado: typeof item.destinoTraslado === 'string' ? item.destinoTraslado : '',
     tratamiento: isValidTreatment(item.tratamiento) ? item.tratamiento : 'paciente',
     nombre: typeof item.nombre === 'string' ? item.nombre : '',
     edad: typeof item.edad === 'string' ? item.edad : '',

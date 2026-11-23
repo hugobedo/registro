@@ -16,10 +16,12 @@ import { ClearShiftModal } from './components/ClearShiftModal';
 import { DischargeModal } from './components/DischargeModal';
 import { Header, type ActiveWorkspaceView } from './components/Header';
 import { HistoryAndSecurityPanel } from './components/HistoryAndSecurityPanel';
+import { HospitalizationModal } from './components/HospitalizationModal';
 import { PatientForm } from './components/PatientForm';
 import { PatientList, type OutcomeFilter } from './components/PatientList';
 import { ReportModal } from './components/ReportModal';
 import { SpellCheckModal } from './components/SpellCheckModal';
+import { TransferModal } from './components/TransferModal';
 import { WhatsAppModal } from './components/WhatsAppModal';
 import {
   ADMIN_EMAIL,
@@ -126,6 +128,8 @@ export default function App() {
   const [selectedCategory, setSelectedCategory] = useState<OutcomeFilter>('todos');
   const [editingPatientId, setEditingPatientId] = useState<string | null>(null);
   const [dischargePatientId, setDischargePatientId] = useState<string | null>(null);
+  const [hospitalizationPatientId, setHospitalizationPatientId] = useState<string | null>(null);
+  const [transferPatientId, setTransferPatientId] = useState<string | null>(null);
   const [whatsAppSession, setWhatsAppSession] = useState<WhatsAppSession | null>(null);
   const [spellCheckSession, setSpellCheckSession] = useState<SpellCheckSession | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<
@@ -404,6 +408,16 @@ export default function App() {
     [patients, dischargePatientId]
   );
 
+  const hospitalizationPatient = useMemo(
+    () => patients.find((p) => p.id === hospitalizationPatientId) ?? null,
+    [patients, hospitalizationPatientId]
+  );
+
+  const transferPatient = useMemo(
+    () => patients.find((p) => p.id === transferPatientId) ?? null,
+    [patients, transferPatientId]
+  );
+
   const whatsAppPatient = useMemo(
     () =>
       whatsAppSession
@@ -478,6 +492,7 @@ export default function App() {
     updates: {
       horaSalida: string;
       estadoEgreso: ExitOutcome;
+      destinoTraslado?: string;
       observacionesSalida: string;
       medico: string;
       enfermera: string;
@@ -501,6 +516,98 @@ export default function App() {
       if (error instanceof ConcurrencyConflictError) {
         setConflictNotice(error.message);
         setDischargePatientId(null);
+      } else {
+        throw error;
+      }
+    } finally {
+      setIsSavingRecord(false);
+    }
+  };
+
+  const handleSaveHospitalization = async (
+    targetPatient: PatientRecord,
+    updates: {
+      medico: string;
+      enfermera: string;
+      diagnostico: string;
+      observacionesSalida: string;
+    },
+    openWhatsAppAfter: boolean
+  ) => {
+    if (!firebaseUser) return;
+    setIsSavingRecord(true);
+    setConflictNotice(null);
+
+    try {
+      await registerDischargeInCloud(
+        targetPatient,
+        {
+          horaSalida: targetPatient.horaSalida,
+          estadoEgreso: 'hospitalizado',
+          destinoTraslado: '',
+          medico: updates.medico,
+          enfermera: updates.enfermera,
+          diagnostico: updates.diagnostico,
+          observacionesSalida: updates.observacionesSalida,
+        },
+        firebaseUser
+      );
+      setHospitalizationPatientId(null);
+      showToast('Hospitalización registrada y sincronizada en tiempo real.');
+
+      if (openWhatsAppAfter) {
+        setWhatsAppSession({ patientId: targetPatient.id, type: 'salida' });
+      }
+    } catch (error) {
+      if (error instanceof ConcurrencyConflictError) {
+        setConflictNotice(error.message);
+        setHospitalizationPatientId(null);
+      } else {
+        throw error;
+      }
+    } finally {
+      setIsSavingRecord(false);
+    }
+  };
+
+  const handleSaveTransfer = async (
+    targetPatient: PatientRecord,
+    updates: {
+      destinoTraslado: string;
+      horaSalida: string;
+      medico: string;
+      observacionesSalida: string;
+    },
+    openWhatsAppAfter: boolean
+  ) => {
+    if (!firebaseUser) return;
+    setIsSavingRecord(true);
+    setConflictNotice(null);
+
+    try {
+      await registerDischargeInCloud(
+        targetPatient,
+        {
+          horaSalida: updates.horaSalida,
+          estadoEgreso: 'trasladado',
+          destinoTraslado: updates.destinoTraslado,
+          medico: updates.medico,
+          enfermera: targetPatient.enfermera,
+          diagnostico: targetPatient.diagnostico,
+          observacionesSalida: updates.observacionesSalida,
+        },
+        firebaseUser
+      );
+      setTransferPatientId(null);
+      showToast('Traslado registrado y sincronizado en tiempo real.');
+
+      if (openWhatsAppAfter) {
+        setWhatsAppSession({ patientId: targetPatient.id, type: 'salida' });
+      }
+    } catch (error) {
+      if (error instanceof ConcurrencyConflictError) {
+        setConflictNotice(error.message);
+        setTransferPatientId(null);
       } else {
         throw error;
       }
@@ -586,6 +693,12 @@ export default function App() {
       if (dischargePatientId === target.id) {
         setDischargePatientId(null);
       }
+      if (hospitalizationPatientId === target.id) {
+        setHospitalizationPatientId(null);
+      }
+      if (transferPatientId === target.id) {
+        setTransferPatientId(null);
+      }
       if (whatsAppSession?.patientId === target.id) {
         setWhatsAppSession(null);
       }
@@ -597,6 +710,8 @@ export default function App() {
     const deletedCount = await deleteAllPatientsInCloud(patients, firebaseUser, verifiedByEmail);
     setEditingPatientId(null);
     setDischargePatientId(null);
+    setHospitalizationPatientId(null);
+    setTransferPatientId(null);
     setWhatsAppSession(null);
     setDeleteTarget(null);
     setSelectedCategory('todos');
@@ -818,7 +933,7 @@ export default function App() {
           <div
             role="group"
             aria-label="Resumen por categoría de pacientes"
-            className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6"
+            className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-4 lg:grid-cols-7"
           >
             {(
               [
@@ -875,6 +990,15 @@ export default function App() {
                   activeClass: 'border-blue-700 bg-blue-700 text-white ring-2 ring-blue-700/25',
                   labelClass: 'text-blue-900',
                   valueClass: 'text-blue-800',
+                },
+                {
+                  id: 'hospitalizado' as OutcomeFilter,
+                  label: 'Hospitalización',
+                  count: counts.hospitalizados,
+                  baseClass: 'border-indigo-200 bg-indigo-50/50 hover:border-indigo-400 hover:bg-indigo-50',
+                  activeClass: 'border-indigo-700 bg-indigo-700 text-white ring-2 ring-indigo-700/25',
+                  labelClass: 'text-indigo-900',
+                  valueClass: 'text-indigo-800',
                 },
               ]
             ).map((card) => {
@@ -993,6 +1117,8 @@ export default function App() {
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
               onOpenDischarge={(patient) => setDischargePatientId(patient.id)}
+              onOpenHospitalization={(patient) => setHospitalizationPatientId(patient.id)}
+              onOpenTransfer={(patient) => setTransferPatientId(patient.id)}
               onOpenWhatsApp={(patient, type) =>
                 setWhatsAppSession({ patientId: patient.id, type })
               }
@@ -1113,6 +1239,26 @@ export default function App() {
           isSaving={isSavingRecord}
           onClose={() => setDischargePatientId(null)}
           onSaveDischarge={handleSaveDischarge}
+          onRequestSpellCheck={handleRequestSpellCheck}
+        />
+      )}
+
+      {hospitalizationPatient && (
+        <HospitalizationModal
+          patient={hospitalizationPatient}
+          isSaving={isSavingRecord}
+          onClose={() => setHospitalizationPatientId(null)}
+          onSaveHospitalization={handleSaveHospitalization}
+          onRequestSpellCheck={handleRequestSpellCheck}
+        />
+      )}
+
+      {transferPatient && (
+        <TransferModal
+          patient={transferPatient}
+          isSaving={isSavingRecord}
+          onClose={() => setTransferPatientId(null)}
+          onSaveTransfer={handleSaveTransfer}
           onRequestSpellCheck={handleRequestSpellCheck}
         />
       )}

@@ -113,7 +113,7 @@ service cloud.firestore {
           'id', 'workspaceId', 'createdAt', 'updatedAt', 'createdAtIso', 'updatedAtIso',
           'createdByUid', 'createdByEmail', 'updatedByUid', 'updatedByEmail', 'version',
           'fechaRegistro',
-          'horaEntrada', 'horaSalida', 'estadoEgreso', 'tratamiento', 'nombre', 'edad',
+          'horaEntrada', 'horaSalida', 'estadoEgreso', 'destinoTraslado', 'tratamiento', 'nombre', 'edad',
           'procedencia', 'motivoVisita', 'observaciones', 'observacionesSalida',
           'medico', 'enfermera', 'diagnostico'
         ])
@@ -133,7 +133,8 @@ service cloud.firestore {
         && (!('fechaRegistro' in data) || (data.fechaRegistro is string && data.fechaRegistro.size() <= 10 && (data.fechaRegistro == '' || data.fechaRegistro.matches('^\\d{4}-\\d{2}-\\d{2}$'))))
         && data.horaEntrada is string && data.horaEntrada.size() <= 10
         && data.horaSalida is string && data.horaSalida.size() <= 10
-        && data.estadoEgreso in ['en_atencion', 'atendido', 'no_espero_turno', 'no_atendido', 'trasladado']
+        && data.estadoEgreso in ['en_atencion', 'atendido', 'no_espero_turno', 'no_atendido', 'trasladado', 'hospitalizado']
+        && (!('destinoTraslado' in data) || (data.destinoTraslado is string && data.destinoTraslado.size() <= 200))
         && data.tratamiento in ['paciente', 'usuario', 'usuaria']
         && data.nombre is string && data.nombre.size() <= 200
         && data.edad is string && data.edad.size() <= 60
@@ -359,20 +360,20 @@ service cloud.firestore {
         && (
           // Action 1: Admin full update of mutable clinical fields
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
-            'fechaRegistro', 'horaEntrada', 'horaSalida', 'estadoEgreso', 'tratamiento', 'nombre', 'edad',
+            'fechaRegistro', 'horaEntrada', 'horaSalida', 'estadoEgreso', 'destinoTraslado', 'tratamiento', 'nombre', 'edad',
             'procedencia', 'motivoVisita', 'observaciones', 'observacionesSalida',
             'medico', 'enfermera', 'diagnostico',
             'updatedAt', 'updatedAtIso', 'updatedByUid', 'updatedByEmail', 'version'
           ]))
-          // Action 2: Approved staff registering or updating discharge details
+          // Action 2: Approved staff registering or updating discharge, hospitalization, or transfer details
           || (incoming().diff(existing()).affectedKeys().hasOnly([
-            'horaSalida', 'estadoEgreso', 'observacionesSalida',
+            'horaSalida', 'estadoEgreso', 'destinoTraslado', 'observacionesSalida',
             'medico', 'enfermera', 'diagnostico',
             'updatedAt', 'updatedAtIso', 'updatedByUid', 'updatedByEmail', 'version'
           ]))
           // Action 3: Approved staff editing patient registration details (cannot delete)
           || (incoming().diff(existing()).affectedKeys().hasOnly([
-            'fechaRegistro', 'horaEntrada', 'horaSalida', 'estadoEgreso', 'tratamiento', 'nombre', 'edad',
+            'fechaRegistro', 'horaEntrada', 'horaSalida', 'estadoEgreso', 'destinoTraslado', 'tratamiento', 'nombre', 'edad',
             'procedencia', 'motivoVisita', 'observaciones', 'observacionesSalida',
             'medico', 'enfermera', 'diagnostico',
             'updatedAt', 'updatedAtIso', 'updatedByUid', 'updatedByEmail', 'version'

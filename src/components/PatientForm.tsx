@@ -49,6 +49,7 @@ function createEmptyFormValues(): PatientFormValues {
     horaEntrada: getCurrentTime24h(),
     horaSalida: '',
     estadoEgreso: 'en_atencion',
+    destinoTraslado: '',
     tratamiento: 'paciente',
     nombre: '',
     edad: '',
@@ -71,6 +72,7 @@ function mapPatientToFormValues(patient: PatientRecord): PatientFormValues {
     horaEntrada: normalizeTime24h(patient.horaEntrada),
     horaSalida: normalizeTime24h(patient.horaSalida),
     estadoEgreso: getPatientOutcome(patient),
+    destinoTraslado: patient.destinoTraslado || '',
     tratamiento: patient.tratamiento,
     nombre: patient.nombre,
     edad: patient.edad,
@@ -144,6 +146,7 @@ export function PatientForm({
       | 'motivoVisita'
       | 'observaciones'
       | 'observacionesSalida'
+      | 'destinoTraslado'
       | 'medico'
       | 'enfermera'
       | 'diagnostico'
@@ -204,6 +207,9 @@ export function PatientForm({
 
     if (editingPatient) {
       fieldsToReview.observacionesSalida = values.observacionesSalida;
+      if (values.destinoTraslado.trim()) {
+        fieldsToReview.destinoTraslado = values.destinoTraslado;
+      }
       fieldsToReview.medico = values.medico;
       fieldsToReview.enfermera = values.enfermera;
       fieldsToReview.diagnostico = values.diagnostico;
@@ -682,6 +688,34 @@ export function PatientForm({
                 ))}
               </div>
             </div>
+
+            {(values.estadoEgreso === 'trasladado' || values.destinoTraslado.trim().length > 0) && (
+              <div>
+                <div className="flex items-center justify-between gap-2">
+                  <label
+                    htmlFor="destinoTraslado"
+                    className="block text-sm font-semibold text-slate-800"
+                  >
+                    {FIELD_LABELS.destinoTraslado}
+                  </label>
+                  <VoiceMicButton
+                    fieldLabel="Destino del traslado"
+                    isActive={voice.activeFieldId === 'form_destinoTraslado'}
+                    isSupported={voice.isSupported}
+                    onClick={() => handleVoiceForField('destinoTraslado')}
+                  />
+                </div>
+                <input
+                  id="destinoTraslado"
+                  type="text"
+                  value={values.destinoTraslado}
+                  onChange={(e) => updateField('destinoTraslado', e.target.value)}
+                  placeholder="Hospital o unidad receptora (opcional)"
+                  autoComplete="off"
+                  className="mt-1.5 min-h-[46px] w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700"
+                />
+              </div>
+            )}
 
             <div>
               <label

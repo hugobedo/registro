@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   Ambulance,
   ArrowLeft,
+  Building2,
   Calendar,
   CheckCircle2,
   ClipboardPlus,
@@ -40,6 +41,8 @@ interface PatientListProps {
   canDelete: boolean;
   onEdit: (patient: PatientRecord) => void;
   onOpenDischarge: (patient: PatientRecord) => void;
+  onOpenHospitalization: (patient: PatientRecord) => void;
+  onOpenTransfer: (patient: PatientRecord) => void;
   onOpenWhatsApp: (patient: PatientRecord, type: MessageType) => void;
   onDeletePatient: (patient: PatientRecord) => void;
   onOpenNewForm: () => void;
@@ -64,6 +67,8 @@ function getCategoryTitle(filter: OutcomeFilter): string {
       return 'No atendidos';
     case 'trasladado':
       return 'Trasladados';
+    case 'hospitalizado':
+      return 'Hospitalización';
     default:
       return 'Todos los pacientes';
   }
@@ -99,6 +104,13 @@ function OutcomeStatusText({ outcome }: { outcome: PatientOutcome }) {
           <span>{getOutcomeLabel(outcome)}</span>
         </span>
       );
+    case 'hospitalizado':
+      return (
+        <span className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-indigo-900">
+          <Building2 className="h-3.5 w-3.5 shrink-0 text-indigo-700" aria-hidden="true" />
+          <span>{getOutcomeLabel(outcome)}</span>
+        </span>
+      );
     default:
       return (
         <span className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1 text-amber-950">
@@ -117,6 +129,8 @@ export function PatientList({
   canDelete,
   onEdit,
   onOpenDischarge,
+  onOpenHospitalization,
+  onOpenTransfer,
   onOpenWhatsApp,
   onDeletePatient,
   onOpenNewForm,
@@ -153,6 +167,7 @@ export function PatientList({
           patient.edad,
           patient.procedencia,
           patient.motivoVisita,
+          patient.destinoTraslado,
           patient.observaciones,
           patient.observacionesSalida,
           patient.medico,
@@ -179,6 +194,7 @@ export function PatientList({
     { id: 'no_espero_turno', label: 'No esperó', count: counts.noEsperoTurno },
     { id: 'no_atendido', label: 'No atendidos', count: counts.noAtendidos },
     { id: 'trasladado', label: 'Trasladados', count: counts.trasladados },
+    { id: 'hospitalizado', label: 'Hospitalización', count: counts.hospitalizados },
   ];
 
   const hasActiveFilter = searchQuery.trim().length > 0 || filter !== 'todos';
@@ -359,6 +375,7 @@ export function PatientList({
 
             const hasDetailFields = Boolean(
               patient.motivoVisita.trim() ||
+                patient.destinoTraslado.trim() ||
                 patient.observaciones.trim() ||
                 patient.medico.trim() ||
                 patient.enfermera.trim() ||
@@ -441,6 +458,17 @@ export function PatientList({
                         </dt>
                         <dd className="mt-0.5 text-slate-900 break-words">
                           {patient.motivoVisita.trim()}
+                        </dd>
+                      </div>
+                    )}
+
+                    {patient.destinoTraslado.trim() && (
+                      <div className="sm:col-span-2">
+                        <dt className="text-xs font-semibold text-slate-500">
+                          {FIELD_LABELS.destinoTraslado}
+                        </dt>
+                        <dd className="mt-0.5 font-semibold text-blue-950 break-words">
+                          {patient.destinoTraslado.trim()}
                         </dd>
                       </div>
                     )}
@@ -536,6 +564,32 @@ export function PatientList({
                       <span>WhatsApp salida</span>
                     </button>
                   )}
+
+                  <button
+                    type="button"
+                    onClick={() => onOpenHospitalization(patient)}
+                    className={`inline-flex min-h-[42px] items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${
+                      outcome === 'hospitalizado'
+                        ? 'border-indigo-700 bg-indigo-700 text-white hover:bg-indigo-800'
+                        : 'border-indigo-300 bg-indigo-50 text-indigo-900 hover:bg-indigo-100'
+                    }`}
+                  >
+                    <Building2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Hospitalización</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onOpenTransfer(patient)}
+                    className={`inline-flex min-h-[42px] items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${
+                      outcome === 'trasladado'
+                        ? 'border-blue-700 bg-blue-700 text-white hover:bg-blue-800'
+                        : 'border-blue-300 bg-blue-50 text-blue-900 hover:bg-blue-100'
+                    }`}
+                  >
+                    <Ambulance className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Traslado</span>
+                  </button>
 
                   <button
                     type="button"

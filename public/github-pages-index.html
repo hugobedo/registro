@@ -107,7 +107,8 @@
       { value: 'atendido', label: 'Atendido', desc: 'Recibió valoración o atención y registró salida.' },
       { value: 'no_espero_turno', label: 'No esperó turno', desc: 'Se retiró antes de pasar a consulta o valoración.' },
       { value: 'no_atendido', label: 'No atendido', desc: 'No fue posible brindarle atención en esta unidad.' },
-      { value: 'trasladado', label: 'Trasladado a otra unidad', desc: 'Referido o trasladado a otro centro de atención.' }
+      { value: 'trasladado', label: 'Trasladado a otra unidad', desc: 'Referido o trasladado a otro centro de atención.' },
+      { value: 'hospitalizado', label: 'Hospitalización', desc: 'Ingresado a hospitalización bajo valoración médica.' }
     ];
 
     const OperationType = {
@@ -200,6 +201,8 @@
       // Formularios en memoria
       intakeForm: null,
       dischargeModal: null,
+      hospitalizationModal: null,
+      transferModal: null,
       whatsappModal: null,
       reportModalOpen: false,
       clearModal: null,
@@ -382,7 +385,7 @@
     }
 
     function getOutcome(p) {
-      if (['atendido', 'no_espero_turno', 'no_atendido', 'trasladado'].includes(p.estadoEgreso)) {
+      if (['atendido', 'no_espero_turno', 'no_atendido', 'trasladado', 'hospitalizado'].includes(p.estadoEgreso)) {
         return p.estadoEgreso;
       }
       return (p.horaSalida || '').trim() ? 'atendido' : 'en_atencion';
@@ -396,6 +399,7 @@
         case 'no_espero_turno': return 'No esperó turno';
         case 'no_atendido': return 'No atendido';
         case 'trasladado': return 'Trasladado a otra unidad';
+        case 'hospitalizado': return 'Hospitalización';
         default: return 'Activo · Sin salida';
       }
     }
@@ -407,6 +411,7 @@
         case 'no_espero_turno': return 'No esperó';
         case 'no_atendido': return 'No atendidos';
         case 'trasladado': return 'Trasladados';
+        case 'hospitalizado': return 'Hospitalización';
         default: return 'Todos los pacientes';
       }
     }
@@ -417,6 +422,7 @@
         case 'no_espero_turno': return 'text-orange-800';
         case 'no_atendido': return 'text-red-800';
         case 'trasladado': return 'text-blue-800';
+        case 'hospitalizado': return 'text-indigo-800';
         default: return 'text-amber-800';
       }
     }
@@ -428,13 +434,14 @@
     }
 
     function computeCounts(list) {
-      const c = { total: list.length, enAtencion: 0, atendidos: 0, noEsperoTurno: 0, noAtendidos: 0, trasladados: 0 };
+      const c = { total: list.length, enAtencion: 0, atendidos: 0, noEsperoTurno: 0, noAtendidos: 0, trasladados: 0, hospitalizados: 0 };
       for (const p of list) {
         const o = getOutcome(p);
         if (o === 'atendido') c.atendidos++;
         else if (o === 'no_espero_turno') c.noEsperoTurno++;
         else if (o === 'no_atendido') c.noAtendidos++;
         else if (o === 'trasladado') c.trasladados++;
+        else if (o === 'hospitalizado') c.hospitalizados++;
         else c.enAtencion++;
       }
       return c;
@@ -629,12 +636,16 @@
       if (type === 'salida' && outcome !== 'en_atencion') {
         add('Estado de egreso', outcomeLabel(outcome));
       }
+      if (type === 'salida') {
+        add('Destino del traslado', p.destinoTraslado);
+      }
       add(treatmentLabel(p.tratamiento), p.nombre);
       add('Edad', p.edad);
       add('Procedencia', p.procedencia);
       add('Motivo de visita', p.motivoVisita);
       if (type === 'ingreso') {
         add('Observaciones', p.observaciones);
+        add('Destino del traslado', p.destinoTraslado);
       } else {
         add('Observaciones', p.observacionesSalida);
         add('Médico que lo atendió', p.medico);
@@ -658,7 +669,8 @@
         `Atendidos: ${c.atendidos}`,
         `No esperó: ${c.noEsperoTurno}`,
         `No atendidos: ${c.noAtendidos}`,
-        `Trasladados: ${c.trasladados}`
+        `Trasladados: ${c.trasladados}`,
+        `Hospitalización: ${c.hospitalizados}`
       ];
       if (sorted.length > 0) {
         lines.push('', 'PACIENTES REGISTRADOS (DEL PRIMERO AL ÚLTIMO)');
@@ -675,6 +687,7 @@
           if ((p.edad || '').trim()) parts.push(`Edad: ${p.edad.trim()}`);
           if ((p.procedencia || '').trim()) parts.push(`Procedencia: ${p.procedencia.trim()}`);
           if ((p.motivoVisita || '').trim()) parts.push(`Motivo de visita: ${p.motivoVisita.trim()}`);
+          if ((p.destinoTraslado || '').trim()) parts.push(`Destino del traslado: ${p.destinoTraslado.trim()}`);
           if ((p.observaciones || '').trim()) parts.push(`Obs. ingreso: ${p.observaciones.trim()}`);
           if ((p.observacionesSalida || '').trim()) parts.push(`Obs. salida: ${p.observacionesSalida.trim()}`);
           if ((p.medico || '').trim()) parts.push(`Médico que lo atendió: ${p.medico.trim()}`);
@@ -730,37 +743,39 @@
       pdf.text(wrappedSup, margin + 33, y + 4.5);
       y += 4.5 + wrappedSup.length * 4 + 2.5;
 
-      // Cuadro resumen de totales (2x3)
+      // Cuadro resumen de totales (2x4)
       const statH = 16;
       pdf.setFillColor(248, 250, 252);
       pdf.setDrawColor(203, 213, 225);
       pdf.setLineWidth(0.3);
       pdf.roundedRect(margin, y, w, statH, 1.5, 1.5, 'FD');
 
-      const colW = w / 3;
+      const colW = w / 4;
       pdf.setDrawColor(226, 232, 240);
       pdf.line(margin + colW, y + 1.5, margin + colW, y + statH - 1.5);
       pdf.line(margin + colW * 2, y + 1.5, margin + colW * 2, y + statH - 1.5);
+      pdf.line(margin + colW * 3, y + 1.5, margin + colW * 3, y + statH - 1.5);
       pdf.line(margin + 2, y + statH / 2, pageW - margin - 2, y + statH / 2);
 
       const cells = [
         { label: 'Total:', value: counts.total, rgb: [15, 23, 42], row: 0, col: 0 },
         { label: 'Activos:', value: counts.enAtencion, rgb: [146, 64, 14], row: 0, col: 1 },
         { label: 'Atendidos:', value: counts.atendidos, rgb: [4, 120, 87], row: 0, col: 2 },
+        { label: 'Hospitalización:', value: counts.hospitalizados, rgb: [67, 56, 202], row: 0, col: 3 },
         { label: 'No esperó:', value: counts.noEsperoTurno, rgb: [154, 52, 18], row: 1, col: 0 },
         { label: 'No atendidos:', value: counts.noAtendidos, rgb: [185, 28, 28], row: 1, col: 1 },
         { label: 'Trasladados:', value: counts.trasladados, rgb: [29, 78, 216], row: 1, col: 2 }
       ];
-      pdf.setFontSize(8.2);
+      pdf.setFontSize(8);
       for (const cell of cells) {
-        const cx = margin + cell.col * colW + 3;
+        const cx = margin + cell.col * colW + 2.5;
         const cy = y + (cell.row === 0 ? 5.3 : 13.2);
         pdf.setFont('helvetica', 'normal');
         pdf.setTextColor(71, 85, 105);
         pdf.text(cell.label, cx, cy);
         pdf.setFont('helvetica', 'bold');
         pdf.setTextColor(cell.rgb[0], cell.rgb[1], cell.rgb[2]);
-        pdf.text(String(cell.value), margin + (cell.col + 1) * colW - 3.5, cy, { align: 'right' });
+        pdf.text(String(cell.value), margin + (cell.col + 1) * colW - 2.5, cy, { align: 'right' });
       }
       y += statH + 6;
 
@@ -785,6 +800,7 @@
         no_espero_turno: { text: [154, 52, 18], fill: [255, 247, 237], border: [253, 186, 116], badge: 'NO ESPERÓ TURNO' },
         no_atendido: { text: [185, 28, 28], fill: [254, 242, 242], border: [252, 165, 165], badge: 'NO ATENDIDO' },
         trasladado: { text: [29, 78, 216], fill: [239, 246, 255], border: [147, 197, 253], badge: 'TRASLADADO A OTRA UNIDAD' },
+        hospitalizado: { text: [67, 56, 202], fill: [238, 242, 255], border: [165, 180, 252], badge: 'HOSPITALIZACIÓN' },
         en_atencion: { text: [146, 64, 14], fill: [254, 243, 199], border: [252, 211, 77], badge: 'ACTIVO — EN ATENCIÓN' }
       };
 
@@ -804,6 +820,7 @@
 
         const clinParts = [];
         if ((p.motivoVisita || '').trim()) clinParts.push(`Motivo de visita: ${p.motivoVisita.trim()}`);
+        if ((p.destinoTraslado || '').trim()) clinParts.push(`Destino del traslado: ${p.destinoTraslado.trim()}`);
         if ((p.observaciones || '').trim()) {
           clinParts.push(`${(p.observacionesSalida || '').trim() ? 'Obs. ingreso' : 'Observaciones'}: ${p.observaciones.trim()}`);
         }
@@ -881,7 +898,7 @@
         pdf.setFontSize(7.5);
         pdf.setTextColor(100, 116, 139);
         pdf.text(
-          `ACE-MED · Encargado: ${DEFAULT_SHIFT_SUPERVISOR} · Atendidos: ${counts.atendidos} | No esperó: ${counts.noEsperoTurno} | No atendido: ${counts.noAtendidos} | Trasladado: ${counts.trasladados} | Activos: ${counts.enAtencion}`,
+          `ACE-MED · Atendidos: ${counts.atendidos} | Hosp.: ${counts.hospitalizados} | No esperó: ${counts.noEsperoTurno} | No atend.: ${counts.noAtendidos} | Trasl.: ${counts.trasladados} | Activos: ${counts.enAtencion}`,
           margin,
           pageH - 6
         );
@@ -947,8 +964,9 @@
         fechaRegistro,
         horaEntrada: typeof d.horaEntrada === 'string' ? d.horaEntrada : '',
         horaSalida,
-        estadoEgreso: ['en_atencion', 'atendido', 'no_espero_turno', 'no_atendido', 'trasladado'].includes(d.estadoEgreso)
+        estadoEgreso: ['en_atencion', 'atendido', 'no_espero_turno', 'no_atendido', 'trasladado', 'hospitalizado'].includes(d.estadoEgreso)
           ? d.estadoEgreso : (horaSalida ? 'atendido' : 'en_atencion'),
+        destinoTraslado: typeof d.destinoTraslado === 'string' ? d.destinoTraslado : '',
         tratamiento: ['paciente', 'usuario', 'usuaria'].includes(d.tratamiento) ? d.tratamiento : 'paciente',
         nombre: typeof d.nombre === 'string' ? d.nombre : '',
         edad: typeof d.edad === 'string' ? d.edad : '',
@@ -1030,7 +1048,7 @@
       const path = `patients/${id}`;
       const nowIso = new Date().toISOString();
       const horaSalida = clamp(form.horaSalida, 10);
-      const estado = ['atendido', 'no_espero_turno', 'no_atendido', 'trasladado'].includes(form.estadoEgreso)
+      const estado = ['atendido', 'no_espero_turno', 'no_atendido', 'trasladado', 'hospitalizado'].includes(form.estadoEgreso)
         ? form.estadoEgreso : (horaSalida ? 'atendido' : 'en_atencion');
       try {
         await setDoc(doc(db, 'patients', id), {
@@ -1049,6 +1067,7 @@
           horaEntrada: clamp(form.horaEntrada, 10),
           horaSalida,
           estadoEgreso: estado,
+          destinoTraslado: clamp(form.destinoTraslado || '', 200),
           tratamiento: ['paciente', 'usuario', 'usuaria'].includes(form.tratamiento) ? form.tratamiento : 'paciente',
           nombre: clamp(form.nombre, 200),
           edad: clamp(form.edad, 60),
@@ -1073,7 +1092,7 @@
       const ref = doc(db, 'patients', existing.id);
       const nowIso = new Date().toISOString();
       const horaSalida = clamp(form.horaSalida, 10);
-      const estado = ['atendido', 'no_espero_turno', 'no_atendido', 'trasladado'].includes(form.estadoEgreso)
+      const estado = ['atendido', 'no_espero_turno', 'no_atendido', 'trasladado', 'hospitalizado'].includes(form.estadoEgreso)
         ? form.estadoEgreso : (horaSalida ? 'atendido' : 'en_atencion');
       try {
         await runTransaction(db, async (tx) => {
@@ -1088,6 +1107,7 @@
             horaEntrada: clamp(form.horaEntrada, 10),
             horaSalida,
             estadoEgreso: estado,
+            destinoTraslado: clamp(form.destinoTraslado || '', 200),
             tratamiento: ['paciente', 'usuario', 'usuaria'].includes(form.tratamiento) ? form.tratamiento : 'paciente',
             nombre: clamp(form.nombre, 200),
             edad: clamp(form.edad, 60),
@@ -1117,17 +1137,22 @@
       const path = `patients/${existing.id}`;
       const ref = doc(db, 'patients', existing.id);
       const nowIso = new Date().toISOString();
+      const nextDestino = clamp(
+        updates.destinoTraslado !== undefined ? updates.destinoTraslado : (existing.destinoTraslado || ''),
+        200
+      );
       try {
         await runTransaction(db, async (tx) => {
           const snap = await tx.get(ref);
           if (!snap.exists()) throw new Error('CONFLICT:Este paciente fue eliminado desde otro dispositivo.');
           const cur = snap.data();
           if ((cur.version || 1) !== existing.version) {
-            throw new Error('CONFLICT:Otro dispositivo actualizó este paciente mientras registrabas la salida. Vuelve a abrir el registro.');
+            throw new Error('CONFLICT:Otro dispositivo actualizó este paciente mientras registrabas los datos. Vuelve a abrir el registro.');
           }
           tx.update(ref, {
             horaSalida: clamp(updates.horaSalida, 10),
             estadoEgreso: updates.estadoEgreso,
+            destinoTraslado: nextDestino,
             observacionesSalida: clamp(updates.observacionesSalida, 1500),
             medico: clamp(updates.medico, 200),
             enfermera: clamp(updates.enfermera, 200),
@@ -1139,12 +1164,14 @@
             version: existing.version + 1
           });
         });
-        await writeAuditLog(
-          'register_discharge',
-          `Registró salida (${outcomeLabel(updates.estadoEgreso)}) de ${existing.nombre || 'paciente'}`,
-          1,
-          existing.id
-        );
+        const label = existing.nombre || 'paciente';
+        let auditSummary = `Registró salida (${outcomeLabel(updates.estadoEgreso)}) de ${label}`;
+        if (updates.estadoEgreso === 'hospitalizado') {
+          auditSummary = `Registró hospitalización de ${label}`;
+        } else if (updates.estadoEgreso === 'trasladado') {
+          auditSummary = `Registró traslado de ${label}${nextDestino ? ` a ${nextDestino}` : ''}`;
+        }
+        await writeAuditLog('register_discharge', auditSummary, 1, existing.id);
       } catch (err) {
         if (err instanceof Error && err.message.startsWith('CONFLICT:')) throw err;
         handleFirestoreError(err, OperationType.UPDATE, path);
@@ -1231,7 +1258,7 @@
         existingIds.add(id);
         const nowIso = new Date().toISOString();
         const hs = clamp(item.horaSalida || '', 10);
-        const st = ['atendido', 'no_espero_turno', 'no_atendido', 'trasladado'].includes(item.estadoEgreso)
+        const st = ['atendido', 'no_espero_turno', 'no_atendido', 'trasladado', 'hospitalizado'].includes(item.estadoEgreso)
           ? item.estadoEgreso : (hs ? 'atendido' : 'en_atencion');
         toInsert.push({
           id,
@@ -1251,6 +1278,7 @@
             horaEntrada: clamp(item.horaEntrada || '', 10),
             horaSalida: hs,
             estadoEgreso: st,
+            destinoTraslado: clamp(item.destinoTraslado || '', 200),
             tratamiento: ['paciente', 'usuario', 'usuaria'].includes(item.tratamiento) ? item.tratamiento : 'paciente',
             nombre: clamp(item.nombre || '', 200),
             edad: clamp(item.edad || '', 60),
@@ -1790,6 +1818,7 @@
         horaEntrada: nowTime24(),
         horaSalida: '',
         estadoEgreso: 'en_atencion',
+        destinoTraslado: '',
         tratamiento: 'paciente',
         nombre: '',
         edad: '',
@@ -1823,6 +1852,7 @@
         horaEntrada: patient.horaEntrada || nowTime24(),
         horaSalida: patient.horaSalida || '',
         estadoEgreso: getOutcome(patient),
+        destinoTraslado: patient.destinoTraslado || '',
         tratamiento: patient.tratamiento || 'paciente',
         nombre: patient.nombre || '',
         edad: patient.edad || '',
@@ -1846,12 +1876,41 @@
         patientId: patient.id,
         horaSalida: patient.horaSalida || nowTime24(),
         estadoEgreso: alreadyExited ? getOutcome(patient) : 'atendido',
+        destinoTraslado: patient.destinoTraslado || '',
         doctorTitle: detectDoctorTitle(patient.medico),
         doctorName: stripDoctorPrefix(patient.medico),
         nurseName: stripNursePrefix(patient.enfermera),
         diagnostico: patient.diagnostico || '',
         // Independiente de ingreso: siempre vacío en nueva salida
         observacionesSalida: alreadyExited ? (patient.observacionesSalida || '') : '',
+        error: ''
+      };
+      render();
+    }
+
+    function openHospitalizationModal(patient) {
+      stopVoice();
+      state.hospitalizationModal = {
+        patientId: patient.id,
+        doctorTitle: detectDoctorTitle(patient.medico),
+        doctorName: stripDoctorPrefix(patient.medico),
+        nurseName: stripNursePrefix(patient.enfermera),
+        diagnostico: patient.diagnostico || '',
+        observacionesSalida: patient.observacionesSalida || '',
+        error: ''
+      };
+      render();
+    }
+
+    function openTransferModal(patient) {
+      stopVoice();
+      state.transferModal = {
+        patientId: patient.id,
+        destinoTraslado: patient.destinoTraslado || '',
+        horaSalida: patient.horaSalida || nowTime24(),
+        doctorTitle: detectDoctorTitle(patient.medico),
+        doctorName: stripDoctorPrefix(patient.medico),
+        observacionesSalida: patient.observacionesSalida || '',
         error: ''
       };
       render();
@@ -1997,7 +2056,7 @@
         if (state.statusFilter !== 'todos' && outcome !== state.statusFilter) return false;
         if (!q) return true;
         const haystack = [
-          p.nombre, p.edad, p.procedencia, p.motivoVisita, p.observaciones,
+          p.nombre, p.edad, p.procedencia, p.motivoVisita, p.destinoTraslado, p.observaciones,
           p.observacionesSalida, p.diagnostico, p.medico, p.enfermera,
           p.fechaRegistro, formatIsoDateEs(p.fechaRegistro),
           p.horaEntrada, fmt12(p.horaEntrada), p.horaSalida, fmt12(p.horaSalida),
@@ -2012,7 +2071,8 @@
         { id: 'atendido', label: 'Atendidos' },
         { id: 'no_espero_turno', label: 'No esperó' },
         { id: 'no_atendido', label: 'No atendidos' },
-        { id: 'trasladado', label: 'Trasladados' }
+        { id: 'trasladado', label: 'Trasladados' },
+        { id: 'hospitalizado', label: 'Hospitalización' }
       ];
 
       return `
@@ -2090,6 +2150,7 @@
 
                 const details = [];
                 if ((p.motivoVisita || '').trim()) details.push(`<div><dt class="inline font-semibold text-slate-900">Motivo de visita:</dt> <dd class="inline">${esc(p.motivoVisita.trim())}</dd></div>`);
+                if ((p.destinoTraslado || '').trim()) details.push(`<div class="sm:col-span-2"><dt class="inline font-semibold text-slate-900">Destino del traslado:</dt> <dd class="inline font-semibold text-blue-900">${esc(p.destinoTraslado.trim())}</dd></div>`);
                 if ((p.observaciones || '').trim()) details.push(`<div><dt class="inline font-semibold text-slate-900">${(p.observacionesSalida || '').trim() ? 'Obs. ingreso:' : 'Observaciones:'}</dt> <dd class="inline">${esc(p.observaciones.trim())}</dd></div>`);
                 if ((p.medico || '').trim()) details.push(`<div><dt class="inline font-semibold text-slate-900">Médico que lo atendió:</dt> <dd class="inline">${esc(p.medico.trim())}</dd></div>`);
                 if ((p.enfermera || '').trim()) details.push(`<div><dt class="inline font-semibold text-slate-900">Enfermera que lo atendió:</dt> <dd class="inline">${esc(p.enfermera.trim())}</dd></div>`);
@@ -2137,6 +2198,22 @@
                             class="min-h-[40px] rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-900 hover:bg-emerald-100 whitespace-nowrap shrink-0">
                             WA Salida
                           </button>` : ''}
+                        <button type="button" data-action="open-hospitalization" data-id="${esc(p.id)}"
+                          class="min-h-[40px] rounded-xl border px-3 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                            outcome === 'hospitalizado'
+                              ? 'border-indigo-700 bg-indigo-700 text-white hover:bg-indigo-800'
+                              : 'border-indigo-300 bg-indigo-50 text-indigo-900 hover:bg-indigo-100'
+                          }">
+                          Hospitalización
+                        </button>
+                        <button type="button" data-action="open-transfer" data-id="${esc(p.id)}"
+                          class="min-h-[40px] rounded-xl border px-3 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                            outcome === 'trasladado'
+                              ? 'border-blue-700 bg-blue-700 text-white hover:bg-blue-800'
+                              : 'border-blue-300 bg-blue-50 text-blue-900 hover:bg-blue-100'
+                          }">
+                          Traslado
+                        </button>
                         <button type="button" data-action="edit-patient" data-id="${esc(p.id)}"
                           class="min-h-[40px] rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0">
                           Editar
@@ -2499,6 +2576,17 @@
                     </div>
                   </div>
 
+                  ${dm.estadoEgreso === 'trasladado' ? `
+                    <div>
+                      <div class="flex items-center justify-between gap-2 mb-1.5">
+                        <label for="d-destino" class="text-xs font-bold text-slate-800">Destino del traslado</label>
+                        ${renderMicButton('discharge:destinoTraslado', 'destino del traslado')}
+                      </div>
+                      <input id="d-destino" data-discharge-field="destinoTraslado" type="text" maxlength="200" value="${esc(dm.destinoTraslado || '')}"
+                        placeholder="Hospital o unidad receptora (opcional)"
+                        class="w-full min-h-[42px] rounded-xl border border-slate-300 px-3 text-sm text-slate-900 focus:border-teal-700 focus:outline-none" />
+                    </div>` : ''}
+
                   <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div>
                       <div class="flex items-center justify-between gap-2 mb-1.5">
@@ -2560,6 +2648,169 @@
         }
       }
 
+      // Modal 1b: Hospitalización (Médico, Enfermera, Diagnóstico, Observaciones)
+      if (state.hospitalizationModal) {
+        const hm = state.hospitalizationModal;
+        const patient = state.patients.find((p) => p.id === hm.patientId);
+        if (patient) {
+          html += `
+            <div class="fixed inset-0 z-40 flex items-end sm:items-center justify-center bg-slate-950/60 p-0 sm:p-5 overflow-y-auto">
+              <div role="dialog" aria-modal="true" aria-label="Registrar hospitalización" class="w-full max-w-2xl rounded-t-2xl sm:rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 max-h-[92vh] overflow-y-auto">
+                <div class="flex items-start justify-between gap-4 border-b border-slate-200 pb-3">
+                  <div>
+                    <div class="text-[11px] font-bold uppercase tracking-wider text-indigo-800">Hospitalización</div>
+                    <h2 class="mt-0.5 text-lg font-bold text-slate-900">${getOutcome(patient) === 'hospitalizado' ? 'Editar datos de hospitalización' : 'Registrar hospitalización del paciente'}</h2>
+                    <p class="text-xs text-slate-600">${[patient.nombre ? esc(patient.nombre) : '', fmt12(patient.horaEntrada) ? `Entrada: ${esc(fmt12(patient.horaEntrada))}` : ''].filter(Boolean).join(' · ')}</p>
+                  </div>
+                  <button type="button" data-action="close-hospitalization" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Cerrar</button>
+                </div>
+
+                ${hm.error ? `<div role="alert" class="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800">${esc(hm.error)}</div>` : ''}
+
+                <div class="mt-4 space-y-4">
+                  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <div class="flex items-center justify-between gap-2 mb-1.5">
+                        <label for="h-medico" class="text-xs font-bold text-slate-800">Médico que lo atendió</label>
+                        ${renderMicButton('hosp:doctorName', 'médico')}
+                      </div>
+                      <div class="flex gap-1.5">
+                        <select data-hosp-field="doctorTitle" aria-label="Título médico" class="min-h-[42px] rounded-xl border border-slate-300 bg-slate-50 px-2.5 text-xs font-bold text-slate-900">
+                          <option value="DR." ${hm.doctorTitle === 'DR.' ? 'selected' : ''}>DR.</option>
+                          <option value="DRA." ${hm.doctorTitle === 'DRA.' ? 'selected' : ''}>DRA.</option>
+                        </select>
+                        <input id="h-medico" data-hosp-field="doctorName" type="text" value="${esc(hm.doctorName)}" placeholder="Nombre y apellidos"
+                          class="flex-1 min-h-[42px] rounded-xl border border-slate-300 px-3 text-sm text-slate-900 focus:border-indigo-700 focus:outline-none" />
+                      </div>
+                      <p class="mt-1 text-[11px] text-slate-500">Se guardará como: <strong>${esc(formatDoctor(hm.doctorTitle, hm.doctorName) || '—')}</strong></p>
+                    </div>
+
+                    <div>
+                      <div class="flex items-center justify-between gap-2 mb-1.5">
+                        <label for="h-enfermera" class="text-xs font-bold text-slate-800">Enfermera que lo atendió</label>
+                        ${renderMicButton('hosp:nurseName', 'enfermera')}
+                      </div>
+                      <div class="flex items-center">
+                        <span class="inline-flex min-h-[42px] items-center rounded-l-xl border border-r-0 border-slate-300 bg-slate-100 px-3 text-xs font-bold text-slate-700">ENF.</span>
+                        <input id="h-enfermera" data-hosp-field="nurseName" type="text" value="${esc(hm.nurseName)}" placeholder="Nombre y apellidos (opcional)"
+                          class="flex-1 min-h-[42px] rounded-r-xl border border-slate-300 px-3 text-sm text-slate-900 focus:border-indigo-700 focus:outline-none" />
+                      </div>
+                      <p class="mt-1 text-[11px] text-slate-500">Se guardará como: <strong>${esc(formatNurse(hm.nurseName) || '—')}</strong></p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div class="flex items-center justify-between gap-2 mb-1.5">
+                      <label for="h-dx" class="text-xs font-bold text-slate-800">Diagnóstico</label>
+                      ${renderMicButton('hosp:diagnostico', 'diagnóstico')}
+                    </div>
+                    <textarea id="h-dx" data-hosp-field="diagnostico" rows="2" maxlength="1500" placeholder="Diagnóstico indicado por el personal médico (opcional)..."
+                      class="w-full rounded-xl border border-slate-300 p-3 text-sm text-slate-900 focus:border-indigo-700 focus:outline-none">${esc(hm.diagnostico)}</textarea>
+                    <p class="mt-1 text-[11px] text-slate-500">Solo los campos completados aparecerán en el formato del paciente y reportes.</p>
+                  </div>
+
+                  <div>
+                    <div class="flex items-center justify-between gap-2 mb-1.5">
+                      <label for="h-obs" class="text-xs font-bold text-slate-800">Observaciones</label>
+                      ${renderMicButton('hosp:observacionesSalida', 'observaciones')}
+                    </div>
+                    <textarea id="h-obs" data-hosp-field="observacionesSalida" rows="2" maxlength="1500"
+                      placeholder="Observaciones de hospitalización (opcional)..."
+                      class="w-full rounded-xl border border-slate-300 p-3 text-sm text-slate-900 focus:border-indigo-700 focus:outline-none">${esc(hm.observacionesSalida)}</textarea>
+                  </div>
+
+                  <div>
+                    <button type="button" data-action="spellcheck-hospitalization" class="min-h-[40px] rounded-xl border border-indigo-300 bg-indigo-50 px-3.5 py-2 text-xs font-bold text-indigo-900 hover:bg-indigo-100">Rectificar escritura y ortografía</button>
+                  </div>
+                </div>
+
+                <div class="mt-5 flex flex-col-reverse gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:justify-end">
+                  <button type="button" data-action="close-hospitalization" class="min-h-[42px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700">Cancelar</button>
+                  <button type="button" data-action="save-hospitalization" data-open-wa="1" ${state.isSaving ? 'disabled' : ''} class="min-h-[42px] rounded-xl border border-emerald-700 bg-emerald-50 px-4 py-2 text-xs font-bold text-emerald-900 hover:bg-emerald-100">Guardar y abrir WhatsApp</button>
+                  <button type="button" data-action="save-hospitalization" data-open-wa="0" ${state.isSaving ? 'disabled' : ''} class="min-h-[42px] rounded-xl bg-indigo-700 px-5 py-2 text-xs font-bold text-white hover:bg-indigo-800">Guardar hospitalización</button>
+                </div>
+              </div>
+            </div>`;
+        }
+      }
+
+      // Modal 1c: Traslado (Destino del traslado, Hora de salida, Médico, Observaciones)
+      if (state.transferModal) {
+        const tm = state.transferModal;
+        const patient = state.patients.find((p) => p.id === tm.patientId);
+        if (patient) {
+          html += `
+            <div class="fixed inset-0 z-40 flex items-end sm:items-center justify-center bg-slate-950/60 p-0 sm:p-5 overflow-y-auto">
+              <div role="dialog" aria-modal="true" aria-label="Registrar traslado" class="w-full max-w-2xl rounded-t-2xl sm:rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 max-h-[92vh] overflow-y-auto">
+                <div class="flex items-start justify-between gap-4 border-b border-slate-200 pb-3">
+                  <div>
+                    <div class="text-[11px] font-bold uppercase tracking-wider text-blue-800">Traslado</div>
+                    <h2 class="mt-0.5 text-lg font-bold text-slate-900">${getOutcome(patient) === 'trasladado' ? 'Editar datos de traslado' : 'Registrar traslado del paciente'}</h2>
+                    <p class="text-xs text-slate-600">${[patient.nombre ? esc(patient.nombre) : '', fmt12(patient.horaEntrada) ? `Entrada: ${esc(fmt12(patient.horaEntrada))}` : ''].filter(Boolean).join(' · ')}</p>
+                  </div>
+                  <button type="button" data-action="close-transfer" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Cerrar</button>
+                </div>
+
+                ${tm.error ? `<div role="alert" class="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800">${esc(tm.error)}</div>` : ''}
+
+                <div class="mt-4 space-y-4">
+                  <div>
+                    <div class="flex items-center justify-between gap-2 mb-1.5">
+                      <label for="t-destino" class="text-xs font-bold text-slate-800">Destino del traslado</label>
+                      ${renderMicButton('transfer:destinoTraslado', 'destino del traslado')}
+                    </div>
+                    <input id="t-destino" data-transfer-field="destinoTraslado" type="text" maxlength="200" value="${esc(tm.destinoTraslado)}"
+                      placeholder="Ej. Hospital General, Clínica, unidad receptora..."
+                      class="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 text-sm text-slate-900 focus:border-blue-700 focus:outline-none" />
+                    <p class="mt-1 text-[11px] text-slate-500">Se mostrará en el formato del paciente y reportes únicamente si fue ingresado.</p>
+                  </div>
+
+                  <div>
+                    <label class="block text-xs font-bold text-slate-800 mb-1.5">Hora de salida (formato 12 h)</label>
+                    ${renderTime12hControl('transfer-salida', tm.horaSalida)}
+                  </div>
+
+                  <div>
+                    <div class="flex items-center justify-between gap-2 mb-1.5">
+                      <label for="t-medico" class="text-xs font-bold text-slate-800">Médico que lo atendió</label>
+                      ${renderMicButton('transfer:doctorName', 'médico')}
+                    </div>
+                    <div class="flex gap-1.5">
+                      <select data-transfer-field="doctorTitle" aria-label="Título médico" class="min-h-[42px] rounded-xl border border-slate-300 bg-slate-50 px-2.5 text-xs font-bold text-slate-900">
+                        <option value="DR." ${tm.doctorTitle === 'DR.' ? 'selected' : ''}>DR.</option>
+                        <option value="DRA." ${tm.doctorTitle === 'DRA.' ? 'selected' : ''}>DRA.</option>
+                      </select>
+                      <input id="t-medico" data-transfer-field="doctorName" type="text" value="${esc(tm.doctorName)}" placeholder="Nombre y apellidos (opcional)"
+                        class="flex-1 min-h-[42px] rounded-xl border border-slate-300 px-3 text-sm text-slate-900 focus:border-blue-700 focus:outline-none" />
+                    </div>
+                    <p class="mt-1 text-[11px] text-slate-500">Se guardará como: <strong>${esc(formatDoctor(tm.doctorTitle, tm.doctorName) || '—')}</strong></p>
+                  </div>
+
+                  <div>
+                    <div class="flex items-center justify-between gap-2 mb-1.5">
+                      <label for="t-obs" class="text-xs font-bold text-slate-800">Observaciones</label>
+                      ${renderMicButton('transfer:observacionesSalida', 'observaciones')}
+                    </div>
+                    <textarea id="t-obs" data-transfer-field="observacionesSalida" rows="2" maxlength="1500"
+                      placeholder="Observaciones del traslado (opcional)..."
+                      class="w-full rounded-xl border border-slate-300 p-3 text-sm text-slate-900 focus:border-blue-700 focus:outline-none">${esc(tm.observacionesSalida)}</textarea>
+                  </div>
+
+                  <div>
+                    <button type="button" data-action="spellcheck-transfer" class="min-h-[40px] rounded-xl border border-blue-300 bg-blue-50 px-3.5 py-2 text-xs font-bold text-blue-900 hover:bg-blue-100">Rectificar escritura y ortografía</button>
+                  </div>
+                </div>
+
+                <div class="mt-5 flex flex-col-reverse gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:justify-end">
+                  <button type="button" data-action="close-transfer" class="min-h-[42px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700">Cancelar</button>
+                  <button type="button" data-action="save-transfer" data-open-wa="1" ${state.isSaving ? 'disabled' : ''} class="min-h-[42px] rounded-xl border border-emerald-700 bg-emerald-50 px-4 py-2 text-xs font-bold text-emerald-900 hover:bg-emerald-100">Guardar y abrir WhatsApp</button>
+                  <button type="button" data-action="save-transfer" data-open-wa="0" ${state.isSaving ? 'disabled' : ''} class="min-h-[42px] rounded-xl bg-blue-700 px-5 py-2 text-xs font-bold text-white hover:bg-blue-800">Guardar traslado</button>
+                </div>
+              </div>
+            </div>`;
+        }
+      }
+
       // Modal 2: WhatsApp
       if (state.whatsappModal) {
         const p = state.patients.find((x) => x.id === state.whatsappModal.patientId);
@@ -2603,6 +2854,7 @@
                 <div class="rounded-xl border border-orange-200 bg-orange-50 p-2"><div class="text-orange-900">No esperó</div><div class="text-lg font-bold tabular-nums text-orange-800">${c.noEsperoTurno}</div></div>
                 <div class="rounded-xl border border-red-200 bg-red-50 p-2"><div class="text-red-900">No atendidos</div><div class="text-lg font-bold tabular-nums text-red-800">${c.noAtendidos}</div></div>
                 <div class="rounded-xl border border-blue-200 bg-blue-50 p-2"><div class="text-blue-900">Trasladados</div><div class="text-lg font-bold tabular-nums text-blue-800">${c.trasladados}</div></div>
+                <div class="rounded-xl border border-indigo-200 bg-indigo-50 p-2"><div class="text-indigo-900">Hospitalización</div><div class="text-lg font-bold tabular-nums text-indigo-800">${c.hospitalizados}</div></div>
               </div>
               <div class="mt-4">
                 <label for="wa-group-url" class="block text-xs font-bold text-slate-800 mb-1">Enlace del grupo de WhatsApp</label>
@@ -2786,14 +3038,15 @@
                 </div>
               </div>
 
-              <div class="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6" role="group" aria-label="Filtrar pacientes por categoría">
+              <div class="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-4 lg:grid-cols-7" role="group" aria-label="Filtrar pacientes por categoría">
                 ${[
                   { id: 'todos', label: 'Total', count: c.total, base: 'border-slate-200 bg-slate-50/70 hover:border-slate-400', active: 'border-slate-900 bg-slate-900 text-white ring-2 ring-slate-900/20', labelCls: 'text-slate-600', numCls: 'text-slate-900' },
                   { id: 'en_atencion', label: 'Activos', count: c.enAtencion, base: 'border-amber-200 bg-amber-50/50 hover:border-amber-400', active: 'border-amber-700 bg-amber-100 ring-2 ring-amber-600/30', labelCls: 'text-amber-900', numCls: 'text-amber-900' },
                   { id: 'atendido', label: 'Atendidos', count: c.atendidos, base: 'border-emerald-200 bg-emerald-50/50 hover:border-emerald-400', active: 'border-emerald-700 bg-emerald-100 ring-2 ring-emerald-600/30', labelCls: 'text-emerald-900', numCls: 'text-emerald-800' },
                   { id: 'no_espero_turno', label: 'No esperó', count: c.noEsperoTurno, base: 'border-orange-200 bg-orange-50/50 hover:border-orange-400', active: 'border-orange-700 bg-orange-100 ring-2 ring-orange-600/30', labelCls: 'text-orange-900', numCls: 'text-orange-800' },
                   { id: 'no_atendido', label: 'No atendidos', count: c.noAtendidos, base: 'border-red-200 bg-red-50/50 hover:border-red-400', active: 'border-red-700 bg-red-100 ring-2 ring-red-600/30', labelCls: 'text-red-900', numCls: 'text-red-800' },
-                  { id: 'trasladado', label: 'Trasladados', count: c.trasladados, base: 'border-blue-200 bg-blue-50/50 hover:border-blue-400', active: 'border-blue-700 bg-blue-100 ring-2 ring-blue-600/30', labelCls: 'text-blue-900', numCls: 'text-blue-800' }
+                  { id: 'trasladado', label: 'Trasladados', count: c.trasladados, base: 'border-blue-200 bg-blue-50/50 hover:border-blue-400', active: 'border-blue-700 bg-blue-100 ring-2 ring-blue-600/30', labelCls: 'text-blue-900', numCls: 'text-blue-800' },
+                  { id: 'hospitalizado', label: 'Hospitalización', count: c.hospitalizados, base: 'border-indigo-200 bg-indigo-50/50 hover:border-indigo-400', active: 'border-indigo-700 bg-indigo-100 ring-2 ring-indigo-600/30', labelCls: 'text-indigo-900', numCls: 'text-indigo-800' }
                 ].map((card) => {
                   const selected = state.activeView === 'pacientes' && state.statusFilter === card.id;
                   const darkSelected = selected && card.id === 'todos';
@@ -2955,6 +3208,30 @@
         return;
       }
 
+      if (target.dataset.hospField && state.hospitalizationModal) {
+        state.hospitalizationModal[target.dataset.hospField] = target.value;
+        if (target.dataset.hospField === 'doctorName' || target.dataset.hospField === 'nurseName') {
+          const pos = target.selectionStart;
+          const id = target.id;
+          render();
+          const el = document.getElementById(id);
+          if (el) { el.focus(); if (pos !== null) el.setSelectionRange(pos, pos); }
+        }
+        return;
+      }
+
+      if (target.dataset.transferField && state.transferModal) {
+        state.transferModal[target.dataset.transferField] = target.value;
+        if (target.dataset.transferField === 'doctorName') {
+          const pos = target.selectionStart;
+          const id = target.id;
+          render();
+          const el = document.getElementById(id);
+          if (el) { el.focus(); if (pos !== null) el.setSelectionRange(pos, pos); }
+        }
+        return;
+      }
+
       if (target.id === 'delete-passcode' && state.clearModal) {
         state.clearModal.passcode = target.value;
         state.clearModal.error = '';
@@ -2973,18 +3250,36 @@
 
       if (target.dataset.timePart) {
         const [prefix, part] = target.dataset.timePart.split(':');
-        const current = prefix === 'intake-entrada' ? state.intakeForm?.horaEntrada : state.dischargeModal?.horaSalida;
+        const current =
+          prefix === 'intake-entrada'
+            ? state.intakeForm?.horaEntrada
+            : prefix === 'transfer-salida'
+              ? state.transferModal?.horaSalida
+              : state.dischargeModal?.horaSalida;
         const cur = parse24To12(current || nowTime24());
         cur[part] = target.value;
         const next24 = to24From12(cur.h || '12', cur.m || '00', cur.p || 'AM');
         if (prefix === 'intake-entrada' && state.intakeForm) state.intakeForm.horaEntrada = next24;
         if (prefix === 'discharge-salida' && state.dischargeModal) state.dischargeModal.horaSalida = next24;
+        if (prefix === 'transfer-salida' && state.transferModal) state.transferModal.horaSalida = next24;
         render();
         return;
       }
 
       if (target.dataset.dischargeField === 'doctorTitle' && state.dischargeModal) {
         state.dischargeModal.doctorTitle = target.value === 'DRA.' ? 'DRA.' : 'DR.';
+        render();
+        return;
+      }
+
+      if (target.dataset.hospField === 'doctorTitle' && state.hospitalizationModal) {
+        state.hospitalizationModal.doctorTitle = target.value === 'DRA.' ? 'DRA.' : 'DR.';
+        render();
+        return;
+      }
+
+      if (target.dataset.transferField === 'doctorTitle' && state.transferModal) {
+        state.transferModal.doctorTitle = target.value === 'DRA.' ? 'DRA.' : 'DR.';
         render();
         return;
       }
@@ -3102,6 +3397,7 @@
           const now = nowTime24();
           if (btn.dataset.prefix === 'intake-entrada' && state.intakeForm) state.intakeForm.horaEntrada = now;
           if (btn.dataset.prefix === 'discharge-salida' && state.dischargeModal) state.dischargeModal.horaSalida = now;
+          if (btn.dataset.prefix === 'transfer-salida' && state.transferModal) state.transferModal.horaSalida = now;
           render();
           break;
         }
@@ -3125,6 +3421,12 @@
             } else if (scope === 'discharge' && state.dischargeModal) {
               const cur = (state.dischargeModal[field] || '').trim();
               state.dischargeModal[field] = cur ? `${cur} ${spoken}` : spoken;
+            } else if (scope === 'hosp' && state.hospitalizationModal) {
+              const cur = (state.hospitalizationModal[field] || '').trim();
+              state.hospitalizationModal[field] = cur ? `${cur} ${spoken}` : spoken;
+            } else if (scope === 'transfer' && state.transferModal) {
+              const cur = (state.transferModal[field] || '').trim();
+              state.transferModal[field] = cur ? `${cur} ${spoken}` : spoken;
             }
           });
           break;
@@ -3158,6 +3460,9 @@
             reviewTextField('diagnostico', 'Diagnóstico', dm.diagnostico),
             reviewTextField('observacionesSalida', 'Observaciones de salida', dm.observacionesSalida)
           ];
+          if (dm.estadoEgreso === 'trasladado' && (dm.destinoTraslado || '').trim()) {
+            proposals.unshift(reviewTextField('destinoTraslado', 'Destino del traslado', dm.destinoTraslado));
+          }
           state.spellModal = {
             proposals,
             onApply: () => {
@@ -3168,6 +3473,52 @@
                 else state.dischargeModal[p.field] = p.proposed;
               }
               showToast('Ortografía de salida rectificada.');
+            }
+          };
+          render();
+          break;
+        }
+        case 'spellcheck-hospitalization': {
+          if (!state.hospitalizationModal) break;
+          const hm = state.hospitalizationModal;
+          const proposals = [
+            reviewTextField('medico', 'Médico', hm.doctorName),
+            reviewTextField('enfermera', 'Enfermera', hm.nurseName),
+            reviewTextField('diagnostico', 'Diagnóstico', hm.diagnostico),
+            reviewTextField('observacionesSalida', 'Observaciones', hm.observacionesSalida)
+          ];
+          state.spellModal = {
+            proposals,
+            onApply: () => {
+              for (const p of proposals) {
+                if (!p.changed || !state.hospitalizationModal) continue;
+                if (p.field === 'medico') state.hospitalizationModal.doctorName = stripDoctorPrefix(p.proposed);
+                else if (p.field === 'enfermera') state.hospitalizationModal.nurseName = stripNursePrefix(p.proposed);
+                else state.hospitalizationModal[p.field] = p.proposed;
+              }
+              showToast('Ortografía de hospitalización rectificada.');
+            }
+          };
+          render();
+          break;
+        }
+        case 'spellcheck-transfer': {
+          if (!state.transferModal) break;
+          const tm = state.transferModal;
+          const proposals = [
+            reviewTextField('destinoTraslado', 'Destino del traslado', tm.destinoTraslado),
+            reviewTextField('medico', 'Médico', tm.doctorName),
+            reviewTextField('observacionesSalida', 'Observaciones', tm.observacionesSalida)
+          ];
+          state.spellModal = {
+            proposals,
+            onApply: () => {
+              for (const p of proposals) {
+                if (!p.changed || !state.transferModal) continue;
+                if (p.field === 'medico') state.transferModal.doctorName = stripDoctorPrefix(p.proposed);
+                else state.transferModal[p.field] = p.proposed;
+              }
+              showToast('Ortografía de traslado rectificada.');
             }
           };
           render();
@@ -3217,6 +3568,7 @@
             await registerDischargeCloud(p, {
               horaSalida: dm.horaSalida,
               estadoEgreso: dm.estadoEgreso,
+              destinoTraslado: dm.estadoEgreso === 'trasladado' ? (dm.destinoTraslado || '').trim() : '',
               observacionesSalida: dm.observacionesSalida,
               medico: formatDoctor(dm.doctorTitle, dm.doctorName),
               enfermera: formatNurse(dm.nurseName),
@@ -3234,6 +3586,88 @@
               state.dischargeModal = null;
             } else {
               dm.error = 'No se pudo guardar la salida. Intenta nuevamente.';
+            }
+          } finally {
+            state.isSaving = false; render();
+          }
+          break;
+        }
+        case 'open-hospitalization': {
+          const p = state.patients.find((x) => x.id === btn.dataset.id);
+          if (p) openHospitalizationModal(p);
+          break;
+        }
+        case 'close-hospitalization':
+          stopVoice(); state.hospitalizationModal = null; render(); break;
+        case 'save-hospitalization': {
+          if (!state.hospitalizationModal) break;
+          const hm = state.hospitalizationModal;
+          const p = state.patients.find((x) => x.id === hm.patientId);
+          if (!p) { state.hospitalizationModal = null; render(); break; }
+          state.isSaving = true; render();
+          try {
+            await registerDischargeCloud(p, {
+              horaSalida: p.horaSalida || '',
+              estadoEgreso: 'hospitalizado',
+              destinoTraslado: '',
+              observacionesSalida: hm.observacionesSalida,
+              medico: formatDoctor(hm.doctorTitle, hm.doctorName),
+              enfermera: formatNurse(hm.nurseName),
+              diagnostico: hm.diagnostico
+            });
+            const openWa = btn.dataset.openWa === '1';
+            const pid = p.id;
+            state.hospitalizationModal = null;
+            showToast('Hospitalización registrada y sincronizada en tiempo real.');
+            if (openWa) state.whatsappModal = { patientId: pid, type: 'salida' };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : '';
+            if (msg.startsWith('CONFLICT:')) {
+              state.conflictNotice = msg.slice('CONFLICT:'.length);
+              state.hospitalizationModal = null;
+            } else {
+              hm.error = 'No se pudo guardar la hospitalización. Intenta nuevamente.';
+            }
+          } finally {
+            state.isSaving = false; render();
+          }
+          break;
+        }
+        case 'open-transfer': {
+          const p = state.patients.find((x) => x.id === btn.dataset.id);
+          if (p) openTransferModal(p);
+          break;
+        }
+        case 'close-transfer':
+          stopVoice(); state.transferModal = null; render(); break;
+        case 'save-transfer': {
+          if (!state.transferModal) break;
+          const tm = state.transferModal;
+          const p = state.patients.find((x) => x.id === tm.patientId);
+          if (!p) { state.transferModal = null; render(); break; }
+          state.isSaving = true; render();
+          try {
+            await registerDischargeCloud(p, {
+              horaSalida: tm.horaSalida,
+              estadoEgreso: 'trasladado',
+              destinoTraslado: (tm.destinoTraslado || '').trim(),
+              observacionesSalida: tm.observacionesSalida,
+              medico: formatDoctor(tm.doctorTitle, tm.doctorName),
+              enfermera: p.enfermera || '',
+              diagnostico: p.diagnostico || ''
+            });
+            const openWa = btn.dataset.openWa === '1';
+            const pid = p.id;
+            state.transferModal = null;
+            showToast('Traslado registrado y sincronizado en tiempo real.');
+            if (openWa) state.whatsappModal = { patientId: pid, type: 'salida' };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : '';
+            if (msg.startsWith('CONFLICT:')) {
+              state.conflictNotice = msg.slice('CONFLICT:'.length);
+              state.transferModal = null;
+            } else {
+              tm.error = 'No se pudo guardar el traslado. Intenta nuevamente.';
             }
           } finally {
             state.isSaving = false; render();
@@ -3299,6 +3733,8 @@
                 await deleteSinglePatientCloud(p, verifier);
                 if (state.editingPatientId === p.id) { state.editingPatientId = null; state.intakeForm = null; }
                 if (state.dischargeModal?.patientId === p.id) state.dischargeModal = null;
+                if (state.hospitalizationModal?.patientId === p.id) state.hospitalizationModal = null;
+                if (state.transferModal?.patientId === p.id) state.transferModal = null;
                 if (state.whatsappModal?.patientId === p.id) state.whatsappModal = null;
               }
               state.clearModal = null;
@@ -3309,6 +3745,8 @@
               state.editingPatientId = null;
               state.intakeForm = null;
               state.dischargeModal = null;
+              state.hospitalizationModal = null;
+              state.transferModal = null;
               state.whatsappModal = null;
               state.activeView = 'pacientes';
               showToast(`Se eliminaron ${removed} registros y quedó registrado en auditoría.`);
