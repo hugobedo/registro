@@ -20,23 +20,17 @@ import { reviewMessageDraft } from '../utils/spellcheck';
 interface WhatsAppModalProps {
   patient: PatientRecord;
   messageType: MessageType;
-  includeEmptyFields: boolean;
   whatsappGroupUrl: string;
-  onChangeIncludeEmptyFields: (value: boolean) => void;
   onClose: () => void;
 }
 
 export function WhatsAppModal({
   patient,
   messageType,
-  includeEmptyFields,
   whatsappGroupUrl,
-  onChangeIncludeEmptyFields,
   onClose,
 }: WhatsAppModalProps) {
-  const [draftText, setDraftText] = useState(() =>
-    buildPatientMessage(patient, messageType, includeEmptyFields)
-  );
+  const [draftText, setDraftText] = useState(() => buildPatientMessage(patient, messageType));
   const [copied, setCopied] = useState(false);
   const [copiedForGroup, setCopiedForGroup] = useState(false);
   const [spellProposal, setSpellProposal] = useState<{
@@ -46,12 +40,12 @@ export function WhatsAppModal({
   } | null>(null);
 
   useEffect(() => {
-    setDraftText(buildPatientMessage(patient, messageType, includeEmptyFields));
+    setDraftText(buildPatientMessage(patient, messageType));
     setSpellProposal(null);
-  }, [patient, messageType, includeEmptyFields]);
+  }, [patient, messageType]);
 
   const handleResetTemplate = () => {
-    setDraftText(buildPatientMessage(patient, messageType, includeEmptyFields));
+    setDraftText(buildPatientMessage(patient, messageType));
     setSpellProposal(null);
   };
 
@@ -110,9 +104,7 @@ export function WhatsAppModal({
               {isIngreso ? 'Mensaje de ingreso para WhatsApp' : 'Mensaje de salida para WhatsApp'}
             </h2>
             <p className="mt-1 text-sm text-slate-600">
-              {isIngreso
-                ? 'Formato estructurado en 12 horas sin asteriscos: incluye hora de entrada, identificación, edad, procedencia, motivo y observaciones (sin diagnóstico).'
-                : 'Formato estructurado en 12 horas sin asteriscos: incluye estado de egreso y todos los datos de entrada y salida en orden.'}
+              Formato limpio que incluye únicamente los datos registrados en este paciente.
             </p>
           </div>
           <button
@@ -127,45 +119,6 @@ export function WhatsAppModal({
 
         {/* Contenido */}
         <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4 sm:px-6">
-          {/* Opción de campos vacíos */}
-          <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3.5 sm:flex-row sm:items-center sm:justify-between">
-            <span className="text-xs font-semibold text-slate-800">
-              Campos vacíos en el mensaje:
-            </span>
-            <div
-              role="radiogroup"
-              aria-label="Cómo mostrar campos vacíos en el mensaje"
-              className="inline-grid grid-cols-2 gap-1 rounded-md border border-slate-200 bg-white p-0.5"
-            >
-              <button
-                type="button"
-                role="radio"
-                aria-checked={!includeEmptyFields}
-                onClick={() => onChangeIncludeEmptyFields(false)}
-                className={`min-h-[34px] whitespace-nowrap rounded px-2.5 py-1 text-xs font-semibold transition-colors ${
-                  !includeEmptyFields
-                    ? 'bg-teal-700 text-white'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Omitir vacíos
-              </button>
-              <button
-                type="button"
-                role="radio"
-                aria-checked={includeEmptyFields}
-                onClick={() => onChangeIncludeEmptyFields(true)}
-                className={`min-h-[34px] whitespace-nowrap rounded px-2.5 py-1 text-xs font-semibold transition-colors ${
-                  includeEmptyFields
-                    ? 'bg-teal-700 text-white'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Líneas en blanco
-              </button>
-            </div>
-          </div>
-
           {/* Editor del mensaje */}
           <div>
             <div className="flex flex-wrap items-center justify-between gap-2">

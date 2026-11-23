@@ -17,7 +17,7 @@ import { DischargeModal } from './components/DischargeModal';
 import { Header, type ActiveWorkspaceView } from './components/Header';
 import { HistoryAndSecurityPanel } from './components/HistoryAndSecurityPanel';
 import { PatientForm } from './components/PatientForm';
-import { PatientList } from './components/PatientList';
+import { PatientList, type OutcomeFilter } from './components/PatientList';
 import { ReportModal } from './components/ReportModal';
 import { SpellCheckModal } from './components/SpellCheckModal';
 import { WhatsAppModal } from './components/WhatsAppModal';
@@ -123,11 +123,14 @@ export default function App() {
 
   // Navegación principal: Pacientes | Formato de entrada | Respaldos y auditoría
   const [activeView, setActiveView] = useState<ActiveWorkspaceView>('pacientes');
+  const [selectedCategory, setSelectedCategory] = useState<OutcomeFilter>('todos');
   const [editingPatientId, setEditingPatientId] = useState<string | null>(null);
   const [dischargePatientId, setDischargePatientId] = useState<string | null>(null);
   const [whatsAppSession, setWhatsAppSession] = useState<WhatsAppSession | null>(null);
   const [spellCheckSession, setSpellCheckSession] = useState<SpellCheckSession | null>(null);
-  const [showClearModal, setShowClearModal] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<
+    null | { mode: 'all' } | { mode: 'single'; patient: PatientRecord }
+  >(null);
   const [showReportModal, setShowReportModal] = useState(false);
   const [isSavingRecord, setIsSavingRecord] = useState(false);
 
@@ -506,13 +509,9 @@ export default function App() {
     }
   };
 
-  const handleDeletePatient = async (patient: PatientRecord) => {
-    if (!firebaseUser) return;
-    await deleteSinglePatientInCloud(patient, firebaseUser);
-    if (editingPatientId === patient.id) {
-      setEditingPatientId(null);
-    }
-    showToast('Registro eliminado de la base de datos compartida.');
+  const handleRequestDeletePatient = (patient: PatientRecord) => {
+    if (!firebaseUser || !isAdmin) return;
+    setDeleteTarget({ mode: 'single', patient });
   };
 
   const handleGeneratePdf = () => {
@@ -575,16 +574,43 @@ export default function App() {
     showToast(`Migración completada: ${imported} registros sincronizados.`);
   };
 
-  const handleConfirmClearAll = async (verifiedByEmail: string) => {
-    if (!firebaseUser) return;
+  const handleConfirmProtectedDelete = async (verifiedByEmail: string) => {
+    if (!firebaseUser || !isAdmin || !deleteTarget) return;
+
+    if (deleteTarget.mode === 'single') {
+      const target = deleteTarget.patient;
+      await deleteSinglePatientInCloud(target, firebaseUser, verifiedByEmail);
+      if (editingPatientId === target.id) {
+        setEditingPatientId(null);
+      }
+      if (dischargePatientId === target.id) {
+        setDischargePatientId(null);
+      }
+      if (whatsAppSession?.patientId === target.id) {
+        setWhatsAppSession(null);
+      }
+      setDeleteTarget(null);
+      showToast('Registro eliminado y registrado en auditoría.');
+      return;
+    }
+
     const deletedCount = await deleteAllPatientsInCloud(patients, firebaseUser, verifiedByEmail);
     setEditingPatientId(null);
     setDischargePatientId(null);
     setWhatsAppSession(null);
-    setShowClearModal(false);
+    setDeleteTarget(null);
+    setSelectedCategory('todos');
     setActiveView('pacientes');
     showToast(
       `Se eliminaron ${deletedCount} registros y quedó registrado en la bitácora de auditoría.`
+    );
+  };
+
+  const handleSelectSummaryCard = (category: OutcomeFilter) => {
+    setEditingPatientId(null);
+    setActiveView('pacientes');
+    setSelectedCategory((prev) =>
+      category !== 'todos' && prev === category && activeView === 'pacientes' ? 'todos' : category
     );
   };
 
@@ -774,63 +800,122 @@ export default function App() {
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setShowClearModal(true)}
-                disabled={patients.length === 0}
-                className="inline-flex min-h-[44px] items-center justify-center gap-2 whitespace-nowrap shrink-0 rounded-xl border border-red-300 bg-white px-4 py-2 text-xs font-semibold text-red-800 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400 disabled:hover:bg-white"
-              >
-                <Trash2 className="h-4 w-4" aria-hidden="true" />
-                <span>Eliminar todos los registros</span>
-              </button>
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setDeleteTarget({ mode: 'all' })}
+                  disabled={patients.length === 0}
+                  className="inline-flex min-h-[44px] items-center justify-center gap-2 whitespace-nowrap shrink-0 rounded-xl border border-red-300 bg-white px-4 py-2 text-xs font-semibold text-red-800 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400 disabled:hover:bg-white"
+                >
+                  <Trash2 className="h-4 w-4" aria-hidden="true" />
+                  <span>Eliminar todos los registros</span>
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Tarjetas KPI limpias y de alto contraste */}
-          <div className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
-            <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5">
-              <div className="text-xs font-semibold text-slate-600">Total</div>
-              <div className="mt-0.5 font-[var(--font-display)] text-2xl font-bold tabular-nums text-slate-900">
-                {counts.total}
-              </div>
-            </div>
-            <div className="rounded-xl border border-amber-200 bg-amber-50/50 px-3.5 py-2.5">
-              <div className="text-xs font-semibold text-amber-900">Activos</div>
-              <div className="mt-0.5 font-[var(--font-display)] text-2xl font-bold tabular-nums text-amber-900">
-                {counts.enAtencion}
-              </div>
-            </div>
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 px-3.5 py-2.5">
-              <div className="text-xs font-semibold text-emerald-900">Atendidos</div>
-              <div className="mt-0.5 font-[var(--font-display)] text-2xl font-bold tabular-nums text-emerald-800">
-                {counts.atendidos}
-              </div>
-            </div>
-            <div className="rounded-xl border border-orange-200 bg-orange-50/50 px-3.5 py-2.5">
-              <div className="text-xs font-semibold text-orange-900">No esperó</div>
-              <div className="mt-0.5 font-[var(--font-display)] text-2xl font-bold tabular-nums text-orange-800">
-                {counts.noEsperoTurno}
-              </div>
-            </div>
-            <div className="rounded-xl border border-red-200 bg-red-50/50 px-3.5 py-2.5">
-              <div className="text-xs font-semibold text-red-900">No atendidos</div>
-              <div className="mt-0.5 font-[var(--font-display)] text-2xl font-bold tabular-nums text-red-800">
-                {counts.noAtendidos}
-              </div>
-            </div>
-            <div className="rounded-xl border border-blue-200 bg-blue-50/50 px-3.5 py-2.5">
-              <div className="text-xs font-semibold text-blue-900">Trasladados</div>
-              <div className="mt-0.5 font-[var(--font-display)] text-2xl font-bold tabular-nums text-blue-800">
-                {counts.trasladados}
-              </div>
-            </div>
+          {/* Tarjetas de resumen interactivas para filtrar pacientes por categoría */}
+          <div
+            role="group"
+            aria-label="Resumen por categoría de pacientes"
+            className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6"
+          >
+            {(
+              [
+                {
+                  id: 'todos' as OutcomeFilter,
+                  label: 'Total',
+                  count: counts.total,
+                  baseClass: 'border-slate-200 bg-slate-50/70 hover:border-slate-400 hover:bg-slate-100/80',
+                  activeClass: 'border-slate-800 bg-slate-900 text-white ring-2 ring-slate-900/20',
+                  labelClass: 'text-slate-600',
+                  valueClass: 'text-slate-900',
+                },
+                {
+                  id: 'en_atencion' as OutcomeFilter,
+                  label: 'Activos',
+                  count: counts.enAtencion,
+                  baseClass: 'border-amber-200 bg-amber-50/50 hover:border-amber-400 hover:bg-amber-50',
+                  activeClass: 'border-amber-700 bg-amber-600 text-white ring-2 ring-amber-600/25',
+                  labelClass: 'text-amber-900',
+                  valueClass: 'text-amber-900',
+                },
+                {
+                  id: 'atendido' as OutcomeFilter,
+                  label: 'Atendidos',
+                  count: counts.atendidos,
+                  baseClass: 'border-emerald-200 bg-emerald-50/50 hover:border-emerald-400 hover:bg-emerald-50',
+                  activeClass: 'border-emerald-700 bg-emerald-700 text-white ring-2 ring-emerald-700/25',
+                  labelClass: 'text-emerald-900',
+                  valueClass: 'text-emerald-800',
+                },
+                {
+                  id: 'no_espero_turno' as OutcomeFilter,
+                  label: 'No esperó',
+                  count: counts.noEsperoTurno,
+                  baseClass: 'border-orange-200 bg-orange-50/50 hover:border-orange-400 hover:bg-orange-50',
+                  activeClass: 'border-orange-700 bg-orange-600 text-white ring-2 ring-orange-600/25',
+                  labelClass: 'text-orange-900',
+                  valueClass: 'text-orange-800',
+                },
+                {
+                  id: 'no_atendido' as OutcomeFilter,
+                  label: 'No atendidos',
+                  count: counts.noAtendidos,
+                  baseClass: 'border-red-200 bg-red-50/50 hover:border-red-400 hover:bg-red-50',
+                  activeClass: 'border-red-700 bg-red-700 text-white ring-2 ring-red-700/25',
+                  labelClass: 'text-red-900',
+                  valueClass: 'text-red-800',
+                },
+                {
+                  id: 'trasladado' as OutcomeFilter,
+                  label: 'Trasladados',
+                  count: counts.trasladados,
+                  baseClass: 'border-blue-200 bg-blue-50/50 hover:border-blue-400 hover:bg-blue-50',
+                  activeClass: 'border-blue-700 bg-blue-700 text-white ring-2 ring-blue-700/25',
+                  labelClass: 'text-blue-900',
+                  valueClass: 'text-blue-800',
+                },
+              ]
+            ).map((card) => {
+              const isSelected = activeView === 'pacientes' && selectedCategory === card.id;
+              return (
+                <button
+                  key={card.id}
+                  type="button"
+                  aria-pressed={isSelected}
+                  onClick={() => handleSelectSummaryCard(card.id)}
+                  className={`rounded-xl border px-3.5 py-2.5 text-left transition-colors cursor-pointer ${
+                    isSelected ? card.activeClass : card.baseClass
+                  }`}
+                >
+                  <div
+                    className={`text-xs font-semibold ${
+                      isSelected ? 'text-white/90' : card.labelClass
+                    }`}
+                  >
+                    {card.label}
+                  </div>
+                  <div
+                    className={`mt-0.5 font-[var(--font-display)] text-2xl font-bold tabular-nums ${
+                      isSelected ? 'text-white' : card.valueClass
+                    }`}
+                  >
+                    {card.count}
+                  </div>
+                </button>
+              );
+            })}
           </div>
 
           {/* Botones principales de navegación directa: PACIENTES | FORMATO DE ENTRADA */}
           <div className="mt-5 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
             <button
               type="button"
-              onClick={() => handleSelectView('pacientes')}
+              onClick={() => {
+                setSelectedCategory('todos');
+                handleSelectView('pacientes');
+              }}
               className={`inline-flex min-h-[48px] items-center justify-center gap-2.5 rounded-xl border px-5 py-3 text-sm font-bold transition-colors ${
                 activeView === 'pacientes'
                   ? 'border-teal-700 bg-teal-700 text-white shadow-xs'
@@ -898,7 +983,10 @@ export default function App() {
           {activeView === 'pacientes' && (
             <PatientList
               patients={patients}
+              filter={selectedCategory}
+              onChangeFilter={setSelectedCategory}
               editingPatientId={editingPatientId}
+              canDelete={isAdmin}
               onEdit={(patient) => {
                 setEditingPatientId(patient.id);
                 setActiveView('entrada');
@@ -908,7 +996,7 @@ export default function App() {
               onOpenWhatsApp={(patient, type) =>
                 setWhatsAppSession({ patientId: patient.id, type })
               }
-              onDeletePatient={(patient) => void handleDeletePatient(patient)}
+              onDeletePatient={handleRequestDeletePatient}
               onOpenNewForm={() => {
                 setEditingPatientId(null);
                 setActiveView('entrada');
@@ -935,7 +1023,9 @@ export default function App() {
               onMigrateLocalRecords={handleManualMigrateLocal}
               onDownloadPdf={handleGeneratePdf}
               onDownloadProjectZip={handleDownloadProjectZip}
-              onOpenClearModal={() => setShowClearModal(true)}
+              onOpenClearModal={() => {
+                if (isAdmin) setDeleteTarget({ mode: 'all' });
+              }}
               onUpdateStaffAccess={handleUpdateStaffAccess}
               onRefreshAccessRequests={handleRefreshAccessRequests}
               onApproveAccessRequest={handleApproveAccessRequest}
@@ -1031,11 +1121,7 @@ export default function App() {
         <WhatsAppModal
           patient={whatsAppPatient}
           messageType={whatsAppSession.type}
-          includeEmptyFields={shiftConfig.incluirCamposVaciosEnMensaje}
           whatsappGroupUrl={shiftConfig.whatsappGroupUrl}
-          onChangeIncludeEmptyFields={(value) =>
-            void handleUpdateShiftConfig({ incluirCamposVaciosEnMensaje: value })
-          }
           onClose={() => setWhatsAppSession(null)}
         />
       )}
@@ -1062,15 +1148,17 @@ export default function App() {
         />
       )}
 
-      {showClearModal && (
+      {deleteTarget && isAdmin && (
         <ClearShiftModal
+          mode={deleteTarget.mode}
+          targetPatient={deleteTarget.mode === 'single' ? deleteTarget.patient : null}
           firebaseUser={firebaseUser}
           patientCount={counts.total}
           activeCount={counts.enAtencion}
           onGenerateReportFirst={handleGeneratePdf}
           onExportJsonFirst={handleExportJsonBackup}
-          onConfirmClear={handleConfirmClearAll}
-          onClose={() => setShowClearModal(false)}
+          onConfirmDelete={handleConfirmProtectedDelete}
+          onClose={() => setDeleteTarget(null)}
         />
       )}
     </div>

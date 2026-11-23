@@ -88,6 +88,11 @@
         "version": {
           "type": "integer"
         },
+        "fechaRegistro": {
+          "type": "string",
+          "maxLength": 10,
+          "pattern": "^(\\d{4}-\\d{2}-\\d{2})?$"
+        },
         "horaEntrada": {
           "type": "string",
           "maxLength": 10

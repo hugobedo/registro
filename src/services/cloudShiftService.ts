@@ -39,6 +39,11 @@ import {
   type TreatmentLabel,
 } from '../types/patient';
 import { handleFirestoreError, OperationType } from '../utils/firestoreError';
+import {
+  extractIsoDateFromTimestamp,
+  getTodayIsoDate,
+  normalizeIsoDate,
+} from '../utils/time';
 
 export class ConcurrencyConflictError extends Error {
   constructor(message: string) {
@@ -85,11 +90,15 @@ function mapDocToPatient(id: string, data: Record<string, unknown>): PatientReco
   const updatedAtIso =
     typeof data.updatedAtIso === 'string' && data.updatedAtIso ? data.updatedAtIso : createdAtIso;
 
+  const fechaRegistro =
+    normalizeIsoDate(data.fechaRegistro) || extractIsoDateFromTimestamp(createdAtIso);
+
   return {
     id,
     workspaceId: typeof data.workspaceId === 'string' ? data.workspaceId : WORKSPACE_ID,
     createdAt: createdAtIso,
     updatedAt: updatedAtIso,
+    fechaRegistro,
     horaEntrada: typeof data.horaEntrada === 'string' ? data.horaEntrada : '',
     horaSalida,
     estadoEgreso: parseOutcome(data.estadoEgreso, horaSalida),
@@ -739,6 +748,8 @@ export async function createPatientInCloud(
   const path = `patients/${id}`;
   const nowIso = new Date().toISOString();
 
+  const fechaRegistro = normalizeIsoDate(values.fechaRegistro) || getTodayIsoDate();
+
   const payload = {
     id,
     workspaceId: WORKSPACE_ID,
@@ -751,6 +762,7 @@ export async function createPatientInCloud(
     updatedByUid: actor.uid,
     updatedByEmail: clampStr(actor.email || '', 200),
     version: 1,
+    fechaRegistro,
     horaEntrada: clampStr(values.horaEntrada, 10),
     horaSalida: clampStr(values.horaSalida, 10),
     estadoEgreso: values.estadoEgreso,
@@ -771,7 +783,7 @@ export async function createPatientInCloud(
     await writeAuditLog({
       action: 'create_patient',
       actor,
-      summary: `Registró ingreso de ${payload.nombre || 'paciente sin nombre'} (${payload.horaEntrada || 'sin hora'})`,
+      summary: `Registró ingreso de ${payload.nombre || 'paciente'} (${payload.horaEntrada || 'sin hora'})`,
       affectedCount: 1,
       patientId: id,
     });
@@ -811,7 +823,14 @@ export async function updatePatientInCloud(
         );
       }
 
+      const normalizedDate =
+        normalizeIsoDate(values.fechaRegistro) ||
+        normalizeIsoDate(existingPatient.fechaRegistro) ||
+        extractIsoDateFromTimestamp(existingPatient.createdAt) ||
+        getTodayIsoDate();
+
       tx.update(ref, {
+        fechaRegistro: normalizedDate,
         horaEntrada: clampStr(values.horaEntrada, 10),
         horaSalida: clampStr(values.horaSalida, 10),
         estadoEgreso: values.estadoEgreso,
@@ -912,15 +931,17 @@ export async function registerDischargeInCloud(
 
 export async function deleteSinglePatientInCloud(
   patient: PatientRecord,
-  actor: User
+  actor: User,
+  verifiedByEmail?: string
 ): Promise<void> {
   const path = `patients/${patient.id}`;
+  const verifier = verifiedByEmail || actor.email || 'administrador';
   try {
     await deleteDoc(doc(db, 'patients', patient.id));
     await writeAuditLog({
       action: 'delete_patient',
       actor,
-      summary: `Eliminó registro individual de ${patient.nombre || 'paciente sin nombre'}`,
+      summary: `Eliminación individual autorizada de ${patient.nombre || 'registro'} (verificada por ${verifier})`,
       affectedCount: 1,
       patientId: patient.id,
     });
@@ -983,18 +1004,24 @@ export async function importPatientsBatchToCloud(
       for (const item of chunk) {
         const safeId = sanitizeDocId(item.id);
         const nowIso = new Date().toISOString();
+        const createdAtIso = clampStr(item.createdAt || nowIso, 40) || nowIso;
+        const fechaRegistro =
+          normalizeIsoDate(item.fechaRegistro) ||
+          extractIsoDateFromTimestamp(createdAtIso) ||
+          getTodayIsoDate();
         batch.set(doc(db, 'patients', safeId), {
           id: safeId,
           workspaceId: WORKSPACE_ID,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
-          createdAtIso: clampStr(item.createdAt || nowIso, 40) || nowIso,
+          createdAtIso,
           updatedAtIso: clampStr(item.updatedAt || nowIso, 40) || nowIso,
           createdByUid: actor.uid,
           createdByEmail: clampStr(actor.email || '', 200),
           updatedByUid: actor.uid,
           updatedByEmail: clampStr(actor.email || '', 200),
           version: 1,
+          fechaRegistro,
           horaEntrada: clampStr(item.horaEntrada, 10),
           horaSalida: clampStr(item.horaSalida, 10),
           estadoEgreso: parseOutcome(item.estadoEgreso, item.horaSalida),
@@ -1031,21 +1058,47 @@ export async function importPatientsBatchToCloud(
 }
 
 // ---------------------------------------------------------
-// Server-Side Delete-All Authorization API (Never client-side)
+// Delete Authorization API (Server-side primary + static hash fallback for GitHub Pages)
 // ---------------------------------------------------------
 
-export async function fetchDeleteAuthStatus(user: User): Promise<DeleteAuthStatus> {
-  const token = await user.getIdToken();
-  const res = await fetch('/api/delete-auth/status', {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
-  if (!res.ok) {
-    throw new Error('No se pudo consultar el estado de seguridad del servidor.');
+const STATIC_DELETE_SALT = 'acemed_static_v2_4c7e1a9d3f208b65';
+const STATIC_DELETE_DIGEST =
+  '73533767a233d4f897538bf947530e21c37becf10645c6947c6db5be42b44c8d';
+
+async function verifyStaticDeleteDigest(passcode: string): Promise<boolean> {
+  const candidate = passcode.trim();
+  if (!candidate || typeof crypto === 'undefined' || !crypto.subtle) {
+    return false;
   }
-  return (await res.json()) as DeleteAuthStatus;
+  const encoded = new TextEncoder().encode(`${STATIC_DELETE_SALT}:${candidate}`);
+  const buffer = await crypto.subtle.digest('SHA-256', encoded);
+  const hex = Array.from(new Uint8Array(buffer))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  return hex === STATIC_DELETE_DIGEST;
+}
+
+export async function fetchDeleteAuthStatus(user: User): Promise<DeleteAuthStatus> {
+  try {
+    const token = await user.getIdToken();
+    const res = await fetch('/api/delete-auth/status', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    const contentType = res.headers.get('content-type') || '';
+    if (res.ok && contentType.includes('application/json')) {
+      return (await res.json()) as DeleteAuthStatus;
+    }
+  } catch {
+    // Fallback for static hosting (e.g. GitHub Pages) without Express backend
+  }
+  return {
+    configured: true,
+    source: 'default',
+    isAdmin: (user.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase(),
+  };
 }
 
 export async function setupServerDeletePasscode(
@@ -1079,30 +1132,51 @@ export async function verifyServerDeletePasscode(
   code?: string;
   error?: string;
 }> {
-  const token = await user.getIdToken();
-  const res = await fetch('/api/delete-auth/verify', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({ passcode }),
-  });
-  const data = (await res.json()) as {
-    authorized?: boolean;
-    verifiedAt?: string;
-    verifiedByEmail?: string;
-    verifiedByName?: string;
-    code?: string;
-    error?: string;
-  };
+  try {
+    const token = await user.getIdToken();
+    const res = await fetch('/api/delete-auth/verify', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ passcode }),
+    });
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = (await res.json()) as {
+        authorized?: boolean;
+        verifiedAt?: string;
+        verifiedByEmail?: string;
+        verifiedByName?: string;
+        code?: string;
+        error?: string;
+      };
+      return {
+        authorized: Boolean(data.authorized && res.ok),
+        verifiedAt: data.verifiedAt,
+        verifiedByEmail: data.verifiedByEmail,
+        verifiedByName: data.verifiedByName,
+        code: data.code,
+        error: data.error,
+      };
+    }
+  } catch {
+    // Static hosting fallback below
+  }
+
+  const matched = await verifyStaticDeleteDigest(passcode);
+  if (!matched) {
+    return {
+      authorized: false,
+      error: 'Contraseña incorrecta. Verifica la clave de autorización.',
+    };
+  }
   return {
-    authorized: Boolean(data.authorized && res.ok),
-    verifiedAt: data.verifiedAt,
-    verifiedByEmail: data.verifiedByEmail,
-    verifiedByName: data.verifiedByName,
-    code: data.code,
-    error: data.error,
+    authorized: true,
+    verifiedAt: new Date().toISOString(),
+    verifiedByEmail: user.email || '',
+    verifiedByName: user.displayName || user.email || 'Administrador',
   };
 }
 

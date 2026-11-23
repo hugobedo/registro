@@ -8,12 +8,12 @@ import {
 import {
   computeShiftCounts,
   getPatientOutcome,
-  hasRegisteredExit,
   type PatientOutcome,
   type PatientRecord,
 } from '../types/patient';
 import {
-  compareByEntryTime,
+  compareByRegistrationOrder,
+  formatIsoDateEs,
   formatReportDateEs,
   formatTime12h,
   getCurrentTime12h,
@@ -68,7 +68,7 @@ function getOutcomePdfStyle(outcome: PatientOutcome): OutcomeVisualStyle {
       };
     default:
       return {
-        badgeText: 'SIN SALIDA — EN ATENCIÓN',
+        badgeText: 'ACTIVO — EN ATENCIÓN',
         textRgb: [146, 64, 14],
         fillRgb: [254, 243, 199],
         borderRgb: [252, 211, 77],
@@ -77,12 +77,11 @@ function getOutcomePdfStyle(outcome: PatientOutcome): OutcomeVisualStyle {
 }
 
 /**
- * Genera y descarga el informe de guardia compacto en formato PDF (A4) en el navegador.
- * - Arriba incluye totales diferenciados: total de pacientes, atendidos, no esperaron turno,
- *   no atendidos, trasladados a otra unidad y pendientes sin salida.
- * - Formato compacto por paciente con entrada y salida integradas y todos los datos disponibles,
- *   ordenado cronológicamente desde el primero que entró hasta el último.
- * - Al final agrupa claramente a los pacientes que quedan sin salida registrada.
+ * Genera y descarga el informe del día en formato PDF (A4):
+ * - Encabezado limpio con REGISTRO DE USUARIOS (sin línea debajo del título)
+ * - Resumen de totales por categoría
+ * - Todos los registros en orden cronológico exacto de subida: del primero al último
+ * - Muestra la fecha de cada registro y únicamente los campos completados por el usuario
  */
 export function generateShiftPdfReport({ patients, responsableGuardia }: ReportOptions): string {
   const doc = new jsPDF({
@@ -101,9 +100,7 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
   const reportTimeText = getCurrentTime12h(now);
   const capitalizedDate = reportDateText.charAt(0).toUpperCase() + reportDateText.slice(1);
 
-  const sortedAll = [...patients].sort(compareByEntryTime);
-  const exitedPatients = sortedAll.filter((p) => hasRegisteredExit(p));
-  const pendingExitPatients = sortedAll.filter((p) => !hasRegisteredExit(p));
+  const sortedAll = [...patients].sort(compareByRegistrationOrder);
   const counts = computeShiftCounts(sortedAll);
 
   let cursorY = PAGE_MARGIN_TOP;
@@ -115,37 +112,33 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
     }
   };
 
-  // Encabezado compacto y profesional
+  // Encabezado limpio: REGISTRO DE USUARIOS sin línea debajo
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(15);
+  doc.setFontSize(14);
   doc.setTextColor(15, 23, 42);
-  doc.text('ACE-MED', PAGE_MARGIN_X, cursorY);
+  doc.text('REGISTRO DE USUARIOS', PAGE_MARGIN_X, cursorY);
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
+  doc.setFontSize(9.5);
   doc.setTextColor(15, 118, 110);
-  doc.text('INFORME DE GUARDIA CLÍNICA', pageWidth - PAGE_MARGIN_X, cursorY, { align: 'right' });
+  doc.text('ACE-MED · INFORME DEL DÍA', pageWidth - PAGE_MARGIN_X, cursorY, { align: 'right' });
 
-  cursorY += 3.5;
-  doc.setDrawColor(15, 118, 110);
-  doc.setLineWidth(0.5);
-  doc.line(PAGE_MARGIN_X, cursorY, pageWidth - PAGE_MARGIN_X, cursorY);
-  cursorY += 5.5;
+  cursorY += 6.5;
 
   // Fecha y Responsable de guardia
   doc.setFontSize(8.5);
   doc.setTextColor(15, 23, 42);
   doc.setFont('helvetica', 'bold');
-  doc.text('Fecha:', PAGE_MARGIN_X, cursorY);
+  doc.text('Fecha de emisión:', PAGE_MARGIN_X, cursorY);
   doc.setFont('helvetica', 'normal');
-  doc.text(`${capitalizedDate} · ${reportTimeText}`, PAGE_MARGIN_X + 13, cursorY);
+  doc.text(`${capitalizedDate} · ${reportTimeText}`, PAGE_MARGIN_X + 29, cursorY);
 
   const supervisorName = responsableGuardia.trim() || DEFAULT_SHIFT_SUPERVISOR;
   doc.setFont('helvetica', 'bold');
-  doc.text('Responsable de guardia:', PAGE_MARGIN_X, cursorY + 4.5);
+  doc.text('Encargado de turno:', PAGE_MARGIN_X, cursorY + 4.5);
   doc.setFont('helvetica', 'normal');
-  const wrappedSupervisor = doc.splitTextToSize(supervisorName, contentWidth - 40) as string[];
-  doc.text(wrappedSupervisor, PAGE_MARGIN_X + 38, cursorY + 4.5);
+  const wrappedSupervisor = doc.splitTextToSize(supervisorName, contentWidth - 36) as string[];
+  doc.text(wrappedSupervisor, PAGE_MARGIN_X + 33, cursorY + 4.5);
   cursorY += 4.5 + wrappedSupervisor.length * 4 + 2.5;
 
   // Cuadro superior de totales diferenciados (2 filas x 3 columnas)
@@ -156,7 +149,6 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
   doc.roundedRect(PAGE_MARGIN_X, cursorY, contentWidth, statBoxHeight, 1.5, 1.5, 'FD');
 
   const colW = contentWidth / 3;
-  // Divisores sutiles internos
   doc.setDrawColor(226, 232, 240);
   doc.line(PAGE_MARGIN_X + colW, cursorY + 1.5, PAGE_MARGIN_X + colW, cursorY + statBoxHeight - 1.5);
   doc.line(
@@ -179,30 +171,12 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
     row: number;
     col: number;
   }> = [
-    { label: 'Total de pacientes:', value: counts.total, rgb: [15, 23, 42], row: 0, col: 0 },
-    { label: 'Atendidos:', value: counts.atendidos, rgb: [4, 120, 87], row: 0, col: 1 },
-    {
-      label: 'No esperaron turno:',
-      value: counts.noEsperoTurno,
-      rgb: [154, 52, 18],
-      row: 0,
-      col: 2,
-    },
-    { label: 'No atendidos:', value: counts.noAtendidos, rgb: [185, 28, 28], row: 1, col: 0 },
-    {
-      label: 'Trasladados a otra unidad:',
-      value: counts.trasladados,
-      rgb: [29, 78, 216],
-      row: 1,
-      col: 1,
-    },
-    {
-      label: 'Sin salida (en atención):',
-      value: counts.enAtencion,
-      rgb: [146, 64, 14],
-      row: 1,
-      col: 2,
-    },
+    { label: 'Total:', value: counts.total, rgb: [15, 23, 42], row: 0, col: 0 },
+    { label: 'Activos:', value: counts.enAtencion, rgb: [146, 64, 14], row: 0, col: 1 },
+    { label: 'Atendidos:', value: counts.atendidos, rgb: [4, 120, 87], row: 0, col: 2 },
+    { label: 'No esperó:', value: counts.noEsperoTurno, rgb: [154, 52, 18], row: 1, col: 0 },
+    { label: 'No atendidos:', value: counts.noAtendidos, rgb: [185, 28, 28], row: 1, col: 1 },
+    { label: 'Trasladados:', value: counts.trasladados, rgb: [29, 78, 216], row: 1, col: 2 },
   ];
 
   doc.setFontSize(8.2);
@@ -222,50 +196,39 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
 
   cursorY += statBoxHeight + 6;
 
-  const renderSectionHeader = (title: string, subtitle: string) => {
-    ensureSpace(12);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10.5);
-    doc.setTextColor(15, 23, 42);
-    doc.text(title, PAGE_MARGIN_X, cursorY);
+  // Encabezado de sección única cronológica (del primero al último)
+  ensureSpace(12);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text('Registros en orden cronológico', PAGE_MARGIN_X, cursorY);
 
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.8);
-    doc.setTextColor(100, 116, 139);
-    doc.text(subtitle, pageWidth - PAGE_MARGIN_X, cursorY, { align: 'right' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.8);
+  doc.setTextColor(100, 116, 139);
+  doc.text('Del primer registro al último', pageWidth - PAGE_MARGIN_X, cursorY, { align: 'right' });
 
-    cursorY += 2;
-    doc.setDrawColor(203, 213, 225);
-    doc.setLineWidth(0.3);
-    doc.line(PAGE_MARGIN_X, cursorY, pageWidth - PAGE_MARGIN_X, cursorY);
-    cursorY += 4.2;
-  };
+  cursorY += 2;
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.3);
+  doc.line(PAGE_MARGIN_X, cursorY, pageWidth - PAGE_MARGIN_X, cursorY);
+  cursorY += 4.2;
 
-  /**
-   * Dibuja una ficha compacta por paciente con todos sus datos disponibles en pocas líneas,
-   * evitando desperdicio de espacio vertical.
-   */
-  const renderCompactPatientRow = (
-    orderNumber: number,
-    patient: PatientRecord,
-    includeExitFields: boolean
-  ) => {
+  const renderCompactPatientRow = (orderNumber: number, patient: PatientRecord) => {
     const outcome = getPatientOutcome(patient);
     const style = getOutcomePdfStyle(outcome);
     const treatmentHeader = getTreatmentHeader(patient.tratamiento);
 
-    const entryTime = formatTime12h(patient.horaEntrada) || '—';
+    const recordDate = formatIsoDateEs(patient.fechaRegistro);
+    const entryTime = formatTime12h(patient.horaEntrada);
     const exitTime = formatTime12h(patient.horaSalida);
 
-    // Construir líneas compactas combinando campos cortos en la misma línea
+    // Solo incluir campos efectivamente completados por el usuario
     const detailLines: string[] = [];
 
-    // Línea 1: Identificación + Edad + Procedencia
     const identityParts: string[] = [];
     if (patient.nombre.trim()) {
       identityParts.push(`${treatmentHeader}: ${patient.nombre.trim()}`);
-    } else {
-      identityParts.push(`${treatmentHeader}`);
     }
     if (patient.edad.trim()) {
       identityParts.push(`${FIELD_LABELS.edad}: ${patient.edad.trim()}`);
@@ -277,38 +240,34 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
       detailLines.push(identityParts.join('  |  '));
     }
 
-    // Línea 2: Motivo de visita + Observaciones de ingreso/salida
-    const intakeParts: string[] = [];
+    const clinicalParts: string[] = [];
     if (patient.motivoVisita.trim()) {
-      intakeParts.push(`${FIELD_LABELS.motivoVisita}: ${patient.motivoVisita.trim()}`);
+      clinicalParts.push(`${FIELD_LABELS.motivoVisita}: ${patient.motivoVisita.trim()}`);
     }
     if (patient.observaciones.trim()) {
-      intakeParts.push(
-        `${includeExitFields ? 'Obs. ingreso' : FIELD_LABELS.observaciones}: ${patient.observaciones.trim()}`
+      clinicalParts.push(
+        `${patient.observacionesSalida.trim() ? 'Obs. ingreso' : FIELD_LABELS.observaciones}: ${patient.observaciones.trim()}`
       );
     }
-    if (includeExitFields && patient.observacionesSalida.trim()) {
-      intakeParts.push(`Obs. salida: ${patient.observacionesSalida.trim()}`);
+    if (patient.observacionesSalida.trim()) {
+      clinicalParts.push(`Obs. salida: ${patient.observacionesSalida.trim()}`);
     }
-    if (intakeParts.length > 0) {
-      detailLines.push(intakeParts.join('  |  '));
+    if (clinicalParts.length > 0) {
+      detailLines.push(clinicalParts.join('  |  '));
     }
 
-    // Línea 3 (solo si es registro con salida): Médico + Enfermera + Diagnóstico
-    if (includeExitFields) {
-      const staffParts: string[] = [];
-      if (patient.medico.trim()) {
-        staffParts.push(`Médico: ${patient.medico.trim()}`);
-      }
-      if (patient.enfermera.trim()) {
-        staffParts.push(`Enfermera: ${patient.enfermera.trim()}`);
-      }
-      if (patient.diagnostico.trim()) {
-        staffParts.push(`${FIELD_LABELS.diagnostico}: ${patient.diagnostico.trim()}`);
-      }
-      if (staffParts.length > 0) {
-        detailLines.push(staffParts.join('  |  '));
-      }
+    const staffParts: string[] = [];
+    if (patient.medico.trim()) {
+      staffParts.push(`${FIELD_LABELS.medico}: ${patient.medico.trim()}`);
+    }
+    if (patient.enfermera.trim()) {
+      staffParts.push(`${FIELD_LABELS.enfermera}: ${patient.enfermera.trim()}`);
+    }
+    if (patient.diagnostico.trim()) {
+      staffParts.push(`${FIELD_LABELS.diagnostico}: ${patient.diagnostico.trim()}`);
+    }
+    if (staffParts.length > 0) {
+      detailLines.push(staffParts.join('  |  '));
     }
 
     doc.setFont('helvetica', 'normal');
@@ -321,7 +280,8 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
     const headerBarH = 5.4;
     const lineH = 3.6;
     const bodyLinesCount = wrappedRows.reduce((sum, lines) => sum + lines.length, 0);
-    const totalBoxH = headerBarH + bodyLinesCount * lineH + 3.2;
+    const totalBoxH =
+      bodyLinesCount > 0 ? headerBarH + bodyLinesCount * lineH + 3.2 : headerBarH + 0.6;
 
     ensureSpace(totalBoxH + 2.2);
 
@@ -331,78 +291,58 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
     doc.setLineWidth(0.22);
     doc.roundedRect(PAGE_MARGIN_X, cursorY, contentWidth, totalBoxH, 1.2, 1.2, 'FD');
 
-    // Franja superior compacta con número, horario entrada/salida y estado diferenciado
+    // Franja superior con número de registro, fecha, hora entrada/salida (si existen) y estado
     doc.setFillColor(...style.fillRgb);
     doc.setDrawColor(...style.borderRgb);
     doc.rect(PAGE_MARGIN_X + 0.2, cursorY + 0.2, contentWidth - 0.4, headerBarH, 'F');
-    doc.line(PAGE_MARGIN_X, cursorY + headerBarH, pageWidth - PAGE_MARGIN_X, cursorY + headerBarH);
+    if (bodyLinesCount > 0) {
+      doc.line(
+        PAGE_MARGIN_X,
+        cursorY + headerBarH,
+        pageWidth - PAGE_MARGIN_X,
+        cursorY + headerBarH
+      );
+    }
 
     const headerTextY = cursorY + 3.8;
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8);
     doc.setTextColor(15, 23, 42);
 
-    const scheduleLabel =
-      includeExitFields && exitTime
-        ? `#${orderNumber}  ·  Entrada ${entryTime}  ->  Salida ${exitTime}`
-        : `#${orderNumber}  ·  Entrada ${entryTime}`;
-
-    doc.text(scheduleLabel, PAGE_MARGIN_X + 3, headerTextY);
+    const scheduleParts: string[] = [`#${orderNumber}`];
+    if (recordDate) scheduleParts.push(recordDate);
+    if (entryTime) scheduleParts.push(`Entrada ${entryTime}`);
+    if (exitTime) scheduleParts.push(`Salida ${exitTime}`);
+    doc.text(scheduleParts.join('  ·  '), PAGE_MARGIN_X + 3, headerTextY);
 
     doc.setTextColor(...style.textRgb);
     doc.text(style.badgeText, pageWidth - PAGE_MARGIN_X - 3, headerTextY, { align: 'right' });
 
-    // Contenido compacto
-    let textY = cursorY + headerBarH + 3.6;
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.setTextColor(30, 41, 59);
+    if (bodyLinesCount > 0) {
+      let textY = cursorY + headerBarH + 3.6;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(30, 41, 59);
 
-    for (const wrapped of wrappedRows) {
-      doc.text(wrapped, PAGE_MARGIN_X + 3, textY);
-      textY += wrapped.length * lineH;
+      for (const wrapped of wrappedRows) {
+        doc.text(wrapped, PAGE_MARGIN_X + 3, textY);
+        textY += wrapped.length * lineH;
+      }
     }
 
     cursorY += totalBoxH + 2.4;
   };
 
-  // SECCIÓN 1: REGISTROS DE ENTRADA Y SALIDA EN ORDEN CRONOLÓGICO
-  renderSectionHeader(
-    '1. Registro cronológico de pacientes con salida',
-    'Ordenados del primer ingreso al último (atendidos, no esperaron turno, no atendidos y trasladados)'
-  );
-
-  if (exitedPatients.length === 0) {
+  if (sortedAll.length === 0) {
     ensureSpace(8);
     doc.setFont('helvetica', 'italic');
     doc.setFontSize(8.5);
     doc.setTextColor(100, 116, 139);
-    doc.text('No hay salidas registradas al momento de generar este informe.', PAGE_MARGIN_X, cursorY);
+    doc.text('No hay registros al momento de generar este informe.', PAGE_MARGIN_X, cursorY);
     cursorY += 7;
   } else {
-    exitedPatients.forEach((patient, index) => {
-      renderCompactPatientRow(index + 1, patient, true);
-    });
-  }
-
-  cursorY += 3;
-
-  // SECCIÓN 2 (AL FINAL): PACIENTES QUE QUEDAN SIN DARLE SALIDA
-  renderSectionHeader(
-    '2. Pacientes pendientes sin salida registrada',
-    'Ordenados por hora de entrada · Permanecen en atención'
-  );
-
-  if (pendingExitPatients.length === 0) {
-    ensureSpace(8);
-    doc.setFont('helvetica', 'italic');
-    doc.setFontSize(8.5);
-    doc.setTextColor(100, 116, 139);
-    doc.text('No quedan pacientes pendientes sin salida al corte del informe.', PAGE_MARGIN_X, cursorY);
-    cursorY += 7;
-  } else {
-    pendingExitPatients.forEach((patient, index) => {
-      renderCompactPatientRow(index + 1, patient, false);
+    sortedAll.forEach((patient, index) => {
+      renderCompactPatientRow(index + 1, patient);
     });
   }
 
@@ -418,7 +358,7 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
     doc.setFontSize(7.5);
     doc.setTextColor(100, 116, 139);
     doc.text(
-      `ACE-MED · Responsable: ${supervisorName} · ${getOutcomeLabel('atendido')}: ${counts.atendidos} | No esperó: ${counts.noEsperoTurno} | No atendido: ${counts.noAtendidos} | Trasladado: ${counts.trasladados} | Sin salida: ${counts.enAtencion}`,
+      `ACE-MED · Encargado: ${supervisorName} · ${getOutcomeLabel('atendido')}: ${counts.atendidos} | No esperó: ${counts.noEsperoTurno} | No atendido: ${counts.noAtendidos} | Trasladado: ${counts.trasladados} | Activos: ${counts.enAtencion}`,
       PAGE_MARGIN_X,
       pageHeight - 6
     );

@@ -7,7 +7,11 @@ import {
   type ShiftState,
   type TreatmentLabel,
 } from '../types/patient';
-import { getIsoDateFilename } from './time';
+import {
+  extractIsoDateFromTimestamp,
+  getIsoDateFilename,
+  normalizeIsoDate,
+} from './time';
 
 const STORAGE_KEY = 'ace_med_turno_v1';
 const MIGRATION_FLAG_KEY = 'ace_med_cloud_migrated_v2';
@@ -37,11 +41,15 @@ export function sanitizePatientRecord(raw: unknown): PatientRecord | null {
   if (typeof item.id !== 'string' || !item.id.trim()) return null;
 
   const horaSalida = typeof item.horaSalida === 'string' ? item.horaSalida : '';
+  const createdAt = typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString();
+  const fechaRegistro =
+    normalizeIsoDate(item.fechaRegistro) || extractIsoDateFromTimestamp(createdAt);
 
   return {
     id: item.id,
-    createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString(),
-    updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : new Date().toISOString(),
+    createdAt,
+    updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : createdAt,
+    fechaRegistro,
     horaEntrada: typeof item.horaEntrada === 'string' ? item.horaEntrada : '',
     horaSalida,
     estadoEgreso: resolveStoredOutcome(item.estadoEgreso, horaSalida),

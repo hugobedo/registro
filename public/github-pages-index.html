@@ -84,6 +84,12 @@
     const DEFAULT_WHATSAPP_GROUP_URL = 'https://chat.whatsapp.com/JuLkCeZy7AU5m6rybWy3Jr';
     const LEGACY_LOCAL_KEY = 'acemed_shift_state_v1';
     const MIGRATION_DONE_KEY = 'acemed_cloud_migrated_v1';
+    const DELETE_PASSCODE_SALT = 'acemed_static_v2_4c7e1a9d3f208b65';
+    const DELETE_PASSCODE_DIGEST = '73533767a233d4f897538bf947530e21c37becf10645c6947c6db5be42b44c8d';
+    const MAX_DELETE_ATTEMPTS = 5;
+    const DELETE_LOCKOUT_MS = 30000;
+    let deleteFailedAttempts = 0;
+    let deleteLockedUntil = 0;
 
     const MOTIVO_SUGGESTIONS = [
       'Cefalea', 'Dolor abdominal', 'Dolor intestinal', 'Fiebre', 'Tos',
@@ -198,7 +204,6 @@
       reportModalOpen: false,
       clearModal: null,
       spellModal: null,
-      deleteConfirmPatientId: null,
       // Voz
       activeVoiceKey: null,
       // Migración local
@@ -261,8 +266,8 @@
 
     function fmt12(t24) {
       const x = parse24To12(t24);
-      if (!x.h) return '—';
-      return `${x.h}:${x.m} ${x.p === 'PM' ? 'p. m.' : 'a. m.'}`;
+      if (!x.h) return '';
+      return `${pad2(x.h)}:${x.m} ${x.p === 'PM' ? 'p. m.' : 'a. m.'}`;
     }
 
     function fmtDateEs(d = new Date()) {
@@ -270,6 +275,89 @@
         weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
       }).format(d);
       return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+
+    function getTodayIsoDate(d = new Date()) {
+      return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    }
+
+    function normalizeIsoDate(raw) {
+      if (typeof raw !== 'string') return '';
+      const trimmed = raw.trim();
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+      if (!m) return '';
+      const y = Number(m[1]);
+      const mo = Number(m[2]);
+      const da = Number(m[3]);
+      if (mo < 1 || mo > 12 || da < 1 || da > 31 || y < 2000 || y > 2100) return '';
+      return trimmed;
+    }
+
+    function extractIsoDateFromTimestamp(iso) {
+      if (!iso) return '';
+      const dt = new Date(iso);
+      if (Number.isNaN(dt.getTime())) return '';
+      return getTodayIsoDate(dt);
+    }
+
+    function formatIsoDateEs(isoDate) {
+      const norm = normalizeIsoDate(isoDate);
+      if (!norm) return '';
+      const [y, mo, da] = norm.split('-');
+      return `${da}/${mo}/${y}`;
+    }
+
+    function timeToMinutes(t24) {
+      const m = /^(\d{1,2}):(\d{2})$/.exec(String(t24 || '').trim());
+      if (!m) return Number.MAX_SAFE_INTEGER;
+      return Number(m[1]) * 60 + Number(m[2]);
+    }
+
+    function compareByRegistrationOrder(a, b) {
+      const tA = Date.parse(a.createdAt || '');
+      const tB = Date.parse(b.createdAt || '');
+      if (!Number.isNaN(tA) && !Number.isNaN(tB) && tA !== tB) return tA - tB;
+      const isoDiff = String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+      if (isoDiff !== 0) return isoDiff;
+      const dateDiff = String(a.fechaRegistro || '').localeCompare(String(b.fechaRegistro || ''));
+      if (dateDiff !== 0) return dateDiff;
+      const entryDiff = timeToMinutes(a.horaEntrada) - timeToMinutes(b.horaEntrada);
+      if (entryDiff !== 0) return entryDiff;
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    }
+
+    async function verifyDeletePasscode(candidate) {
+      const now = Date.now();
+      if (now < deleteLockedUntil) {
+        const secs = Math.ceil((deleteLockedUntil - now) / 1000);
+        return { ok: false, message: `Demasiados intentos fallidos. Espera ${secs} s antes de reintentar.` };
+      }
+      const clean = String(candidate || '').trim();
+      if (!clean) {
+        return { ok: false, message: 'Ingresa la contraseña de autorización.' };
+      }
+      if (!window.crypto?.subtle) {
+        return { ok: false, message: 'Este navegador no admite verificación criptográfica segura.' };
+      }
+      const data = new TextEncoder().encode(`${DELETE_PASSCODE_SALT}:${clean}`);
+      const buf = await window.crypto.subtle.digest('SHA-256', data);
+      const hex = Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+      let diff = hex.length ^ DELETE_PASSCODE_DIGEST.length;
+      for (let i = 0; i < Math.min(hex.length, DELETE_PASSCODE_DIGEST.length); i++) {
+        diff |= hex.charCodeAt(i) ^ DELETE_PASSCODE_DIGEST.charCodeAt(i);
+      }
+      if (diff === 0) {
+        deleteFailedAttempts = 0;
+        deleteLockedUntil = 0;
+        return { ok: true, message: '' };
+      }
+      deleteFailedAttempts += 1;
+      if (deleteFailedAttempts >= MAX_DELETE_ATTEMPTS) {
+        deleteLockedUntil = Date.now() + DELETE_LOCKOUT_MS;
+        deleteFailedAttempts = 0;
+        return { ok: false, message: 'Contraseña incorrecta. Intenta de nuevo en 30 segundos.' };
+      }
+      return { ok: false, message: 'Contraseña incorrecta. Verifica e intenta nuevamente.' };
     }
 
     function fmtDateTimeShort(iso) {
@@ -308,7 +396,18 @@
         case 'no_espero_turno': return 'No esperó turno';
         case 'no_atendido': return 'No atendido';
         case 'trasladado': return 'Trasladado a otra unidad';
-        default: return 'En atención (sin salida)';
+        default: return 'Activo · Sin salida';
+      }
+    }
+
+    function categoryTitle(filter) {
+      switch (filter) {
+        case 'en_atencion': return 'Activos';
+        case 'atendido': return 'Atendidos';
+        case 'no_espero_turno': return 'No esperó';
+        case 'no_atendido': return 'No atendidos';
+        case 'trasladado': return 'Trasladados';
+        default: return 'Todos los pacientes';
       }
     }
 
@@ -517,21 +616,17 @@
     // =========================================================================
     // 5. MENSAJES WHATSAPP E INFORME PDF COMPACTO A4
     // =========================================================================
-    function buildWhatsAppText(p, type, includeEmpty) {
+    function buildWhatsAppText(p, type) {
       const outcome = getOutcome(p);
-      const lines = [
-        'REGISTRO DE USUARIO',
-        type === 'salida' ? 'TIPO DE REGISTRO: SALIDA' : 'TIPO DE REGISTRO: INGRESO',
-        '--------------------------------'
-      ];
+      const lines = ['REGISTRO DE USUARIOS'];
       const add = (label, val) => {
         const clean = String(val || '').trim();
         if (clean) lines.push(`${label}: ${clean}`);
-        else if (includeEmpty) lines.push(`${label}: No registrado`);
       };
       add('Hora de entrada', fmt12(p.horaEntrada));
-      if (type === 'salida') {
-        add('Hora de salida', p.horaSalida ? fmt12(p.horaSalida) : 'No registrada');
+      add('Hora de salida', fmt12(p.horaSalida));
+      add('Fecha', formatIsoDateEs(p.fechaRegistro));
+      if (type === 'salida' && outcome !== 'en_atencion') {
         add('Estado de egreso', outcomeLabel(outcome));
       }
       add(treatmentLabel(p.tratamiento), p.nombre);
@@ -539,33 +634,56 @@
       add('Procedencia', p.procedencia);
       add('Motivo de visita', p.motivoVisita);
       if (type === 'ingreso') {
-        add('Observaciones', p.observaciones || 'Sin diagnóstico');
+        add('Observaciones', p.observaciones);
       } else {
+        add('Observaciones', p.observacionesSalida);
         add('Médico que lo atendió', p.medico);
         add('Enfermera que lo atendió', p.enfermera);
         add('Diagnóstico', p.diagnostico);
-        add('Observaciones de entrada', p.observaciones);
-        add('Observaciones de salida', p.observacionesSalida);
       }
-      lines.push('--------------------------------');
-      lines.push(`Responsable de guardia: ${DEFAULT_SHIFT_SUPERVISOR}`);
       return lines.join('\n');
     }
 
     function buildShiftSummaryText(list) {
-      const c = computeCounts(list);
-      return [
-        'RESUMEN DE GUARDIA',
-        `Fecha: ${fmtDateEs(new Date())}`,
-        `Responsable de guardia: ${DEFAULT_SHIFT_SUPERVISOR}`,
-        '--------------------------------',
-        `Total de pacientes: ${c.total}`,
+      const sorted = [...list].sort(compareByRegistrationOrder);
+      const c = computeCounts(sorted);
+      const lines = [
+        'REGISTRO DE USUARIOS',
+        `Informe del día: ${fmtDateEs(new Date())}, ${fmt12(nowTime24())}`,
+        `Encargado de turno: ${DEFAULT_SHIFT_SUPERVISOR}`,
+        '',
+        'RESUMEN DEL TURNO',
+        `Total: ${c.total}`,
+        `Activos: ${c.enAtencion}`,
         `Atendidos: ${c.atendidos}`,
-        `No esperó turno: ${c.noEsperoTurno}`,
+        `No esperó: ${c.noEsperoTurno}`,
         `No atendidos: ${c.noAtendidos}`,
-        `Trasladados a otra unidad: ${c.trasladados}`,
-        `En atención (sin salida): ${c.enAtencion}`
-      ].join('\n');
+        `Trasladados: ${c.trasladados}`
+      ];
+      if (sorted.length > 0) {
+        lines.push('', 'PACIENTES REGISTRADOS (DEL PRIMERO AL ÚLTIMO)');
+        sorted.forEach((p, idx) => {
+          const outcome = getOutcome(p);
+          const dateStr = formatIsoDateEs(p.fechaRegistro);
+          const entry = fmt12(p.horaEntrada);
+          const exit = fmt12(p.horaSalida);
+          const parts = [`${idx + 1}. [${outcomeLabel(outcome)}]`];
+          if (dateStr) parts.push(`Fecha: ${dateStr}`);
+          if (entry) parts.push(`Hora de entrada: ${entry}`);
+          if (exit) parts.push(`Hora de salida: ${exit}`);
+          if ((p.nombre || '').trim()) parts.push(`${treatmentLabel(p.tratamiento)}: ${p.nombre.trim()}`);
+          if ((p.edad || '').trim()) parts.push(`Edad: ${p.edad.trim()}`);
+          if ((p.procedencia || '').trim()) parts.push(`Procedencia: ${p.procedencia.trim()}`);
+          if ((p.motivoVisita || '').trim()) parts.push(`Motivo de visita: ${p.motivoVisita.trim()}`);
+          if ((p.observaciones || '').trim()) parts.push(`Obs. ingreso: ${p.observaciones.trim()}`);
+          if ((p.observacionesSalida || '').trim()) parts.push(`Obs. salida: ${p.observacionesSalida.trim()}`);
+          if ((p.medico || '').trim()) parts.push(`Médico que lo atendió: ${p.medico.trim()}`);
+          if ((p.enfermera || '').trim()) parts.push(`Enfermera que lo atendió: ${p.enfermera.trim()}`);
+          if ((p.diagnostico || '').trim()) parts.push(`Diagnóstico: ${p.diagnostico.trim()}`);
+          lines.push(parts.join(' | '));
+        });
+      }
+      return lines.join('\n');
     }
 
     function generateShiftPdf(list) {
@@ -577,107 +695,200 @@
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
       const pageW = pdf.internal.pageSize.getWidth();
       const pageH = pdf.internal.pageSize.getHeight();
-      const margin = 10;
+      const margin = 14;
       const w = pageW - margin * 2;
-      const counts = computeCounts(list);
-      const chrono = [...list].sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
-      const exited = chrono.filter((p) => hasExit(p));
-      const pending = chrono.filter((p) => !hasExit(p));
+      const maxY = pageH - 15;
+      const sorted = [...list].sort(compareByRegistrationOrder);
+      const counts = computeCounts(sorted);
 
-      let y = 11;
-      pdf.setFillColor(15, 118, 110);
-      pdf.rect(margin, y - 3, w, 17, 'F');
-      pdf.setTextColor(255, 255, 255);
+      let y = 15;
+      const ensure = (h) => { if (y + h > maxY) { pdf.addPage(); y = 15; } };
+
+      // Encabezado limpio: REGISTRO DE USUARIOS sin línea debajo
       pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(11.5);
-      pdf.text('INFORME DE GUARDIA — REGISTRO DE USUARIOS', margin + 3, y + 2.5);
-      pdf.setFont('helvetica', 'normal');
-      pdf.setFontSize(8.2);
-      pdf.text(`Fecha: ${fmtDateEs(new Date())}   |   Responsable de guardia: ${DEFAULT_SHIFT_SUPERVISOR}`, margin + 3, y + 9.5);
-      y += 17;
+      pdf.setFontSize(14);
+      pdf.setTextColor(15, 23, 42);
+      pdf.text('REGISTRO DE USUARIOS', margin, y);
 
-      pdf.setFillColor(241, 245, 249);
-      pdf.setDrawColor(203, 213, 225);
-      pdf.rect(margin, y, w, 11, 'FD');
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(9.5);
+      pdf.setTextColor(15, 118, 110);
+      pdf.text('ACE-MED · INFORME DEL DÍA', pageW - margin, y, { align: 'right' });
+      y += 6.5;
+
+      pdf.setFontSize(8.5);
       pdf.setTextColor(15, 23, 42);
       pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(7.8);
-      pdf.text(
-        `Total: ${counts.total}  |  Atendidos: ${counts.atendidos}  |  No esperó turno: ${counts.noEsperoTurno}  |  No atendidos: ${counts.noAtendidos}  |  Trasladados: ${counts.trasladados}  |  Sin salida: ${counts.enAtencion}`,
-        margin + 2.5,
-        y + 7
-      );
-      y += 14;
+      pdf.text('Fecha de emisión:', margin, y);
+      pdf.setFont('helvetica', 'normal');
+      pdf.text(`${fmtDateEs(new Date())} · ${fmt12(nowTime24())}`, margin + 29, y);
 
-      const ensure = (h) => { if (y + h > pageH - 12) { pdf.addPage(); y = 13; } };
-      const sectionBar = (title, rgb) => {
-        ensure(8);
-        pdf.setFillColor(rgb[0], rgb[1], rgb[2]);
-        pdf.rect(margin, y, w, 5.8, 'F');
-        pdf.setTextColor(255, 255, 255);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('Encargado de turno:', margin, y + 4.5);
+      pdf.setFont('helvetica', 'normal');
+      const wrappedSup = pdf.splitTextToSize(DEFAULT_SHIFT_SUPERVISOR, w - 36);
+      pdf.text(wrappedSup, margin + 33, y + 4.5);
+      y += 4.5 + wrappedSup.length * 4 + 2.5;
+
+      // Cuadro resumen de totales (2x3)
+      const statH = 16;
+      pdf.setFillColor(248, 250, 252);
+      pdf.setDrawColor(203, 213, 225);
+      pdf.setLineWidth(0.3);
+      pdf.roundedRect(margin, y, w, statH, 1.5, 1.5, 'FD');
+
+      const colW = w / 3;
+      pdf.setDrawColor(226, 232, 240);
+      pdf.line(margin + colW, y + 1.5, margin + colW, y + statH - 1.5);
+      pdf.line(margin + colW * 2, y + 1.5, margin + colW * 2, y + statH - 1.5);
+      pdf.line(margin + 2, y + statH / 2, pageW - margin - 2, y + statH / 2);
+
+      const cells = [
+        { label: 'Total:', value: counts.total, rgb: [15, 23, 42], row: 0, col: 0 },
+        { label: 'Activos:', value: counts.enAtencion, rgb: [146, 64, 14], row: 0, col: 1 },
+        { label: 'Atendidos:', value: counts.atendidos, rgb: [4, 120, 87], row: 0, col: 2 },
+        { label: 'No esperó:', value: counts.noEsperoTurno, rgb: [154, 52, 18], row: 1, col: 0 },
+        { label: 'No atendidos:', value: counts.noAtendidos, rgb: [185, 28, 28], row: 1, col: 1 },
+        { label: 'Trasladados:', value: counts.trasladados, rgb: [29, 78, 216], row: 1, col: 2 }
+      ];
+      pdf.setFontSize(8.2);
+      for (const cell of cells) {
+        const cx = margin + cell.col * colW + 3;
+        const cy = y + (cell.row === 0 ? 5.3 : 13.2);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(71, 85, 105);
+        pdf.text(cell.label, cx, cy);
         pdf.setFont('helvetica', 'bold');
-        pdf.setFontSize(8);
-        pdf.text(title, margin + 2.5, y + 4);
-        y += 7.5;
+        pdf.setTextColor(cell.rgb[0], cell.rgb[1], cell.rgb[2]);
+        pdf.text(String(cell.value), margin + (cell.col + 1) * colW - 3.5, cy, { align: 'right' });
+      }
+      y += statH + 6;
+
+      // Sección única en orden cronológico de registro (del primero al último)
+      ensure(12);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(10.5);
+      pdf.setTextColor(15, 23, 42);
+      pdf.text('Registros en orden cronológico', margin, y);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(7.8);
+      pdf.setTextColor(100, 116, 139);
+      pdf.text('Del primer registro al último', pageW - margin, y, { align: 'right' });
+      y += 2;
+      pdf.setDrawColor(203, 213, 225);
+      pdf.setLineWidth(0.3);
+      pdf.line(margin, y, pageW - margin, y);
+      y += 4.2;
+
+      const stylesMap = {
+        atendido: { text: [4, 120, 87], fill: [236, 253, 245], border: [167, 243, 208], badge: 'ATENDIDO' },
+        no_espero_turno: { text: [154, 52, 18], fill: [255, 247, 237], border: [253, 186, 116], badge: 'NO ESPERÓ TURNO' },
+        no_atendido: { text: [185, 28, 28], fill: [254, 242, 242], border: [252, 165, 165], badge: 'NO ATENDIDO' },
+        trasladado: { text: [29, 78, 216], fill: [239, 246, 255], border: [147, 197, 253], badge: 'TRASLADADO A OTRA UNIDAD' },
+        en_atencion: { text: [146, 64, 14], fill: [254, 243, 199], border: [252, 211, 77], badge: 'ACTIVO — EN ATENCIÓN' }
       };
 
       const drawRow = (p, idx) => {
         const o = getOutcome(p);
-        const l1 = `${idx}. [${outcomeLabel(o).toUpperCase()}] ${p.nombre || 'Sin nombre'} (${p.edad || 'Edad N/R'}) — ${p.procedencia || 'Procedencia N/R'}`;
-        const l2 = `Entrada: ${fmt12(p.horaEntrada)} | Salida: ${p.horaSalida ? fmt12(p.horaSalida) : 'Sin salida'} | Motivo: ${p.motivoVisita || 'N/R'}`;
-        const extras = [];
-        if (p.medico) extras.push(`Médico: ${p.medico}`);
-        if (p.enfermera) extras.push(`Enfermera: ${p.enfermera}`);
-        if (p.diagnostico) extras.push(`Dx: ${p.diagnostico}`);
-        if (p.observaciones) extras.push(`Obs. ingreso: ${p.observaciones}`);
-        if (p.observacionesSalida) extras.push(`Obs. salida: ${p.observacionesSalida}`);
-        const l3 = extras.join(' | ');
+        const st = stylesMap[o] || stylesMap.en_atencion;
+        const dateStr = formatIsoDateEs(p.fechaRegistro);
+        const entry = fmt12(p.horaEntrada);
+        const exit = fmt12(p.horaSalida);
 
-        pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.8);
-        const s1 = pdf.splitTextToSize(l1, w - 4);
-        pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.3);
-        const s2 = pdf.splitTextToSize(l2, w - 4);
-        const s3 = l3 ? pdf.splitTextToSize(l3, w - 4) : [];
-        const boxH = 2.6 + s1.length * 3.3 + s2.length * 3.1 + s3.length * 3.1 + 1.8;
+        const detailLines = [];
+        const idParts = [];
+        if ((p.nombre || '').trim()) idParts.push(`${treatmentLabel(p.tratamiento)}: ${p.nombre.trim()}`);
+        if ((p.edad || '').trim()) idParts.push(`Edad: ${p.edad.trim()}`);
+        if ((p.procedencia || '').trim()) idParts.push(`Procedencia: ${p.procedencia.trim()}`);
+        if (idParts.length) detailLines.push(idParts.join('  |  '));
 
-        ensure(boxH + 1.8);
-        pdf.setDrawColor(226, 232, 240);
-        const fills = {
-          atendido: [240, 253, 244],
-          no_espero_turno: [255, 247, 237],
-          no_atendido: [254, 242, 242],
-          trasladado: [239, 246, 255],
-          en_atencion: [254, 252, 232]
-        };
-        const f = fills[o] || [248, 250, 252];
-        pdf.setFillColor(f[0], f[1], f[2]);
-        pdf.rect(margin, y, w, boxH, 'FD');
+        const clinParts = [];
+        if ((p.motivoVisita || '').trim()) clinParts.push(`Motivo de visita: ${p.motivoVisita.trim()}`);
+        if ((p.observaciones || '').trim()) {
+          clinParts.push(`${(p.observacionesSalida || '').trim() ? 'Obs. ingreso' : 'Observaciones'}: ${p.observaciones.trim()}`);
+        }
+        if ((p.observacionesSalida || '').trim()) clinParts.push(`Obs. salida: ${p.observacionesSalida.trim()}`);
+        if (clinParts.length) detailLines.push(clinParts.join('  |  '));
 
-        let ty = y + 3.6;
-        pdf.setTextColor(15, 23, 42); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.8);
-        pdf.text(s1, margin + 2, ty); ty += s1.length * 3.3;
-        pdf.setTextColor(51, 65, 85); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.3);
-        pdf.text(s2, margin + 2, ty); ty += s2.length * 3.1;
-        if (s3.length) { pdf.setTextColor(30, 41, 59); pdf.text(s3, margin + 2, ty); }
-        y += boxH + 1.6;
+        const staffParts = [];
+        if ((p.medico || '').trim()) staffParts.push(`Médico que lo atendió: ${p.medico.trim()}`);
+        if ((p.enfermera || '').trim()) staffParts.push(`Enfermera que lo atendió: ${p.enfermera.trim()}`);
+        if ((p.diagnostico || '').trim()) staffParts.push(`Diagnóstico: ${p.diagnostico.trim()}`);
+        if (staffParts.length) detailLines.push(staffParts.join('  |  '));
+
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(8);
+        const wrappedRows = detailLines.map((line) => pdf.splitTextToSize(line, w - 6));
+        const headerBarH = 5.4;
+        const lineH = 3.6;
+        const bodyCount = wrappedRows.reduce((sum, arr) => sum + arr.length, 0);
+        const boxH = bodyCount > 0 ? headerBarH + bodyCount * lineH + 3.2 : headerBarH + 0.6;
+
+        ensure(boxH + 2.2);
+        pdf.setDrawColor(203, 213, 225);
+        pdf.setFillColor(255, 255, 255);
+        pdf.setLineWidth(0.22);
+        pdf.roundedRect(margin, y, w, boxH, 1.2, 1.2, 'FD');
+
+        pdf.setFillColor(st.fill[0], st.fill[1], st.fill[2]);
+        pdf.setDrawColor(st.border[0], st.border[1], st.border[2]);
+        pdf.rect(margin + 0.2, y + 0.2, w - 0.4, headerBarH, 'F');
+        if (bodyCount > 0) pdf.line(margin, y + headerBarH, pageW - margin, y + headerBarH);
+
+        const hTextY = y + 3.8;
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(8);
+        pdf.setTextColor(15, 23, 42);
+        const sched = [`#${idx}`];
+        if (dateStr) sched.push(dateStr);
+        if (entry) sched.push(`Entrada ${entry}`);
+        if (exit) sched.push(`Salida ${exit}`);
+        pdf.text(sched.join('  ·  '), margin + 3, hTextY);
+
+        pdf.setTextColor(st.text[0], st.text[1], st.text[2]);
+        pdf.text(st.badge, pageW - margin - 3, hTextY, { align: 'right' });
+
+        if (bodyCount > 0) {
+          let ty = y + headerBarH + 3.6;
+          pdf.setFont('helvetica', 'normal');
+          pdf.setFontSize(8);
+          pdf.setTextColor(30, 41, 59);
+          for (const wr of wrappedRows) {
+            pdf.text(wr, margin + 3, ty);
+            ty += wr.length * lineH;
+          }
+        }
+        y += boxH + 2.4;
       };
 
-      if (list.length === 0) {
-        pdf.setTextColor(71, 85, 105); pdf.setFontSize(9);
-        pdf.text('No hay pacientes registrados en este turno.', margin, y + 5);
+      if (sorted.length === 0) {
+        ensure(8);
+        pdf.setFont('helvetica', 'italic');
+        pdf.setFontSize(8.5);
+        pdf.setTextColor(100, 116, 139);
+        pdf.text('No hay registros al momento de generar este informe.', margin, y);
       } else {
-        if (exited.length) {
-          sectionBar(`PACIENTES CON SALIDA REGISTRADA (${exited.length}) — ORDEN CRONOLÓGICO`, [15, 118, 110]);
-          exited.forEach((p, i) => drawRow(p, i + 1));
-        }
-        if (pending.length) {
-          sectionBar(`PACIENTES SIN SALIDA / EN ATENCIÓN (${pending.length})`, [180, 83, 9]);
-          pending.forEach((p, i) => drawRow(p, exited.length + i + 1));
-        }
+        sorted.forEach((p, i) => drawRow(p, i + 1));
       }
 
-      const d = new Date();
-      const fname = `Informe_Guardia_${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}.pdf`;
+      const totalPages = pdf.getNumberOfPages();
+      for (let pn = 1; pn <= totalPages; pn++) {
+        pdf.setPage(pn);
+        pdf.setDrawColor(226, 232, 240);
+        pdf.setLineWidth(0.25);
+        pdf.line(margin, pageH - 10, pageW - margin, pageH - 10);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(7.5);
+        pdf.setTextColor(100, 116, 139);
+        pdf.text(
+          `ACE-MED · Encargado: ${DEFAULT_SHIFT_SUPERVISOR} · Atendidos: ${counts.atendidos} | No esperó: ${counts.noEsperoTurno} | No atendido: ${counts.noAtendidos} | Trasladado: ${counts.trasladados} | Activos: ${counts.enAtencion}`,
+          margin,
+          pageH - 6
+        );
+        pdf.text(`Página ${pn} de ${totalPages}`, pageW - margin, pageH - 6, { align: 'right' });
+      }
+
+      const fname = `ACE-MED_Informe_Guardia_${getTodayIsoDate(new Date())}.pdf`;
       pdf.save(fname);
       showToast(`Informe descargado: ${fname}`);
     }
@@ -727,11 +938,13 @@
       const horaSalida = typeof d.horaSalida === 'string' ? d.horaSalida : '';
       const createdAt = typeof d.createdAtIso === 'string' && d.createdAtIso ? d.createdAtIso : new Date().toISOString();
       const updatedAt = typeof d.updatedAtIso === 'string' && d.updatedAtIso ? d.updatedAtIso : createdAt;
+      const fechaRegistro = normalizeIsoDate(d.fechaRegistro) || extractIsoDateFromTimestamp(createdAt);
       return {
         id,
         workspaceId: d.workspaceId || WORKSPACE_ID,
         createdAt,
         updatedAt,
+        fechaRegistro,
         horaEntrada: typeof d.horaEntrada === 'string' ? d.horaEntrada : '',
         horaSalida,
         estadoEgreso: ['en_atencion', 'atendido', 'no_espero_turno', 'no_atendido', 'trasladado'].includes(d.estadoEgreso)
@@ -832,6 +1045,7 @@
           updatedByUid: u.uid,
           updatedByEmail: clamp(u.email || '', 200),
           version: 1,
+          fechaRegistro: normalizeIsoDate(form.fechaRegistro) || getTodayIsoDate(),
           horaEntrada: clamp(form.horaEntrada, 10),
           horaSalida,
           estadoEgreso: estado,
@@ -870,6 +1084,7 @@
             throw new Error('CONFLICT:Otro dispositivo actualizó este paciente mientras editabas. Revisa los datos más recientes antes de guardar.');
           }
           tx.update(ref, {
+            fechaRegistro: normalizeIsoDate(form.fechaRegistro) || normalizeIsoDate(existing.fechaRegistro) || getTodayIsoDate(),
             horaEntrada: clamp(form.horaEntrada, 10),
             horaSalida,
             estadoEgreso: estado,
@@ -936,18 +1151,20 @@
       }
     }
 
-    async function deleteSinglePatientCloud(p) {
+    async function deleteSinglePatientCloud(p, verifiedByEmail) {
+      if (!isAdmin()) throw new Error('Solo cuentas administradoras pueden eliminar registros.');
       const path = `patients/${p.id}`;
       try {
         await deleteDoc(doc(db, 'patients', p.id));
-        await writeAuditLog('delete_patient', `Eliminó registro de ${p.nombre || 'paciente'}`, 1, p.id);
+        const byNote = verifiedByEmail ? ` (autorizado con clave por ${verifiedByEmail})` : '';
+        await writeAuditLog('delete_patient', `Eliminó registro de ${p.nombre || 'paciente'}${byNote}`, 1, p.id);
       } catch (err) {
         handleFirestoreError(err, OperationType.DELETE, path);
       }
     }
 
-    async function deleteAllPatientsCloud(list) {
-      if (!isAdmin()) throw new Error('Solo la cuenta administradora puede eliminar todos los registros.');
+    async function deleteAllPatientsCloud(list, verifiedByEmail) {
+      if (!isAdmin()) throw new Error('Solo cuentas administradoras pueden eliminar todos los registros.');
       const total = list.length;
       try {
         for (let i = 0; i < list.length; i += 400) {
@@ -956,9 +1173,10 @@
           for (const p of chunk) batch.delete(doc(db, 'patients', p.id));
           await batch.commit();
         }
+        const byNote = verifiedByEmail ? ` por ${verifiedByEmail}` : '';
         await writeAuditLog(
           'delete_all_patients',
-          `Eliminación total autorizada por administrador (${total} registros)`,
+          `Eliminación total autorizada con clave${byNote} (${total} registros)`,
           total,
           ''
         );
@@ -1029,6 +1247,7 @@
             updatedByUid: u.uid,
             updatedByEmail: clamp(u.email || '', 200),
             version: 1,
+            fechaRegistro: normalizeIsoDate(item.fechaRegistro) || extractIsoDateFromTimestamp(item.createdAt || nowIso) || getTodayIsoDate(),
             horaEntrada: clamp(item.horaEntrada || '', 10),
             horaSalida: hs,
             estadoEgreso: st,
@@ -1344,7 +1563,7 @@
         (snap) => {
           state.patients = snap.docs
             .map((d) => mapPatientDoc(d.id, d.data()))
-            .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+            .sort(compareByRegistrationOrder);
           state.fromCache = snap.metadata.fromCache;
           state.patientsLoaded = true;
           void maybeMigrateLegacyLocal();
@@ -1566,6 +1785,8 @@
     // =========================================================================
     function createEmptyIntakeForm() {
       return {
+        fechaRegistro: getTodayIsoDate(),
+        editingDate: false,
         horaEntrada: nowTime24(),
         horaSalida: '',
         estadoEgreso: 'en_atencion',
@@ -1597,6 +1818,8 @@
       state.editingPatientId = patient.id;
       state.formError = '';
       state.intakeForm = {
+        fechaRegistro: normalizeIsoDate(patient.fechaRegistro) || extractIsoDateFromTimestamp(patient.createdAt) || getTodayIsoDate(),
+        editingDate: false,
         horaEntrada: patient.horaEntrada || nowTime24(),
         horaSalida: patient.horaSalida || '',
         estadoEgreso: getOutcome(patient),
@@ -1763,17 +1986,28 @@
     }
 
     function renderPatientsView() {
+      const admin = isAdmin();
+      const sorted = [...state.patients].sort(compareByRegistrationOrder);
+      const orderById = new Map();
+      sorted.forEach((p, idx) => orderById.set(p.id, idx + 1));
+
       const q = state.searchQuery.trim().toLowerCase();
-      const filtered = state.patients.filter((p) => {
+      const filtered = sorted.filter((p) => {
         const outcome = getOutcome(p);
         if (state.statusFilter !== 'todos' && outcome !== state.statusFilter) return false;
         if (!q) return true;
-        const haystack = [p.nombre, p.procedencia, p.motivoVisita, p.diagnostico, p.medico, p.enfermera].join(' ').toLowerCase();
+        const haystack = [
+          p.nombre, p.edad, p.procedencia, p.motivoVisita, p.observaciones,
+          p.observacionesSalida, p.diagnostico, p.medico, p.enfermera,
+          p.fechaRegistro, formatIsoDateEs(p.fechaRegistro),
+          p.horaEntrada, fmt12(p.horaEntrada), p.horaSalida, fmt12(p.horaSalida),
+          outcomeLabel(outcome)
+        ].join(' ').toLowerCase();
         return haystack.includes(q);
       });
 
       const filters = [
-        { id: 'todos', label: 'Todos' },
+        { id: 'todos', label: 'Total' },
         { id: 'en_atencion', label: 'Activos' },
         { id: 'atendido', label: 'Atendidos' },
         { id: 'no_espero_turno', label: 'No esperó' },
@@ -1783,10 +2017,30 @@
 
       return `
         <section aria-label="Listado de pacientes" class="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6">
-          <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-slate-200 pb-4">
+            <div>
+              <h2 class="text-lg font-bold text-slate-900">
+                ${state.statusFilter === 'todos' ? 'Listado de pacientes registrados' : `Pacientes · ${esc(categoryTitle(state.statusFilter))}`}
+              </h2>
+              <p class="mt-0.5 text-xs text-slate-600">Orden de registro: del primero al último</p>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              ${state.statusFilter !== 'todos' ? `
+                <button type="button" data-action="reset-filters"
+                  class="min-h-[38px] rounded-xl border border-teal-700/40 bg-teal-50 px-3.5 py-1.5 text-xs font-bold text-teal-900 hover:bg-teal-100 whitespace-nowrap shrink-0">
+                  Ver todos (${state.patients.length})
+                </button>` : ''}
+              <button type="button" data-action="go-entrada"
+                class="min-h-[38px] rounded-xl bg-teal-700 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-teal-800 whitespace-nowrap shrink-0">
+                Nuevo ingreso
+              </button>
+            </div>
+          </div>
+
+          <div class="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div class="relative flex-1 max-w-xl">
-              <label for="patient-search" class="sr-only">Buscar paciente por nombre y apellidos</label>
-              <input id="patient-search" type="search" value="${esc(state.searchQuery)}" placeholder="Buscar paciente por nombre, apellidos, motivo o procedencia..."
+              <label for="patient-search" class="sr-only">Buscar paciente</label>
+              <input id="patient-search" type="search" value="${esc(state.searchQuery)}" placeholder="Buscar por nombre, fecha, motivo, procedencia o médico..."
                 class="w-full min-h-[44px] rounded-xl border border-slate-300 bg-slate-50 px-4 pr-24 text-sm text-slate-900 placeholder:text-slate-500 focus:border-teal-700 focus:bg-white focus:outline-none" />
               ${state.searchQuery ? `<button type="button" data-action="clear-search" class="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100">Limpiar</button>` : ''}
             </div>
@@ -1802,20 +2056,20 @@
           </div>
 
           <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 border-b border-slate-200 pb-3">
-            <span class="tabular-nums">Mostrando <strong>${filtered.length}</strong> de <strong>${state.patients.length}</strong> pacientes · Orden: más recientes primero</span>
-            ${(state.searchQuery || state.statusFilter !== 'todos') ? `<button type="button" data-action="reset-filters" class="font-semibold text-teal-800 hover:underline">Ver todos los registros</button>` : ''}
+            <span class="tabular-nums">Mostrando <strong>${filtered.length}</strong> de <strong>${state.patients.length}</strong> pacientes</span>
+            ${(state.searchQuery || state.statusFilter !== 'todos') ? `<button type="button" data-action="reset-filters" class="font-semibold text-teal-800 hover:underline">Ver vista general</button>` : ''}
           </div>
 
           ${!state.patientsLoaded ? `
             <div class="py-12 text-center text-sm text-slate-500">Cargando pacientes desde la base de datos compartida...</div>
           ` : filtered.length === 0 ? `
             <div class="py-12 text-center">
-              <p class="text-base font-semibold text-slate-900">${state.patients.length === 0 ? 'Aún no hay pacientes registrados en esta guardia' : 'No se encontraron coincidencias para tu búsqueda'}</p>
-              <p class="mt-1 text-sm text-slate-600">${state.patients.length === 0 ? 'Selecciona Formato de entrada para capturar el primer ingreso.' : 'Intenta con otro nombre o limpia el filtro activo.'}</p>
+              <p class="text-base font-semibold text-slate-900">${state.patients.length === 0 ? 'Aún no hay pacientes registrados en esta guardia' : 'No hay pacientes en esta categoría o búsqueda'}</p>
+              <p class="mt-1 text-sm text-slate-600">${state.patients.length === 0 ? 'Selecciona Formato de entrada para capturar el primer ingreso.' : 'Vuelve a la vista general para consultar todos los registros.'}</p>
               <div class="mt-4 flex justify-center gap-2">
                 ${state.patients.length === 0
                   ? `<button type="button" data-action="go-entrada" class="min-h-[44px] rounded-xl bg-teal-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-teal-800">Abrir Formato de entrada</button>`
-                  : `<button type="button" data-action="reset-filters" class="min-h-[44px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50">Limpiar filtros</button>`}
+                  : `<button type="button" data-action="reset-filters" class="min-h-[44px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50">Ver todos los pacientes</button>`}
               </div>
             </div>
           ` : `
@@ -1823,34 +2077,46 @@
               ${filtered.map((p) => {
                 const outcome = getOutcome(p);
                 const exited = hasExit(p);
-                const confirmingDel = state.deleteConfirmPatientId === p.id;
+                const orderNum = orderById.get(p.id) || 1;
+                const dateStr = formatIsoDateEs(p.fechaRegistro);
+                const entryStr = fmt12(p.horaEntrada);
+                const exitStr = fmt12(p.horaSalida);
+                const metaItems = [];
+                if (dateStr) metaItems.push(`<span class="font-mono-num text-slate-800">Fecha: ${esc(dateStr)}</span>`);
+                if (entryStr) metaItems.push(`<span class="font-mono-num text-slate-800">Entrada: ${esc(entryStr)}</span>`);
+                if (exitStr) metaItems.push(`<span class="font-mono-num text-slate-800">Salida: ${esc(exitStr)}</span>`);
+                if ((p.edad || '').trim()) metaItems.push(`<span>${esc(p.edad.trim())}</span>`);
+                if ((p.procedencia || '').trim()) metaItems.push(`<span>${esc(p.procedencia.trim())}</span>`);
+
+                const details = [];
+                if ((p.motivoVisita || '').trim()) details.push(`<div><dt class="inline font-semibold text-slate-900">Motivo de visita:</dt> <dd class="inline">${esc(p.motivoVisita.trim())}</dd></div>`);
+                if ((p.observaciones || '').trim()) details.push(`<div><dt class="inline font-semibold text-slate-900">${(p.observacionesSalida || '').trim() ? 'Obs. ingreso:' : 'Observaciones:'}</dt> <dd class="inline">${esc(p.observaciones.trim())}</dd></div>`);
+                if ((p.medico || '').trim()) details.push(`<div><dt class="inline font-semibold text-slate-900">Médico que lo atendió:</dt> <dd class="inline">${esc(p.medico.trim())}</dd></div>`);
+                if ((p.enfermera || '').trim()) details.push(`<div><dt class="inline font-semibold text-slate-900">Enfermera que lo atendió:</dt> <dd class="inline">${esc(p.enfermera.trim())}</dd></div>`);
+                if ((p.diagnostico || '').trim()) details.push(`<div class="sm:col-span-2"><dt class="inline font-semibold text-slate-900">Diagnóstico:</dt> <dd class="inline">${esc(p.diagnostico.trim())}</dd></div>`);
+                if ((p.observacionesSalida || '').trim()) details.push(`<div class="sm:col-span-2"><dt class="inline font-semibold text-slate-900">Obs. salida:</dt> <dd class="inline">${esc(p.observacionesSalida.trim())}</dd></div>`);
+
                 return `
                   <article class="py-4 first:pt-4 last:pb-1">
                     <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                       <div class="min-w-0 flex-1">
                         <div class="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-                          <h3 class="text-base font-bold text-slate-900">${esc(p.nombre || 'Paciente sin nombre')}</h3>
+                          <span class="font-mono-num text-xs font-bold text-slate-500">#${orderNum}</span>
+                          ${(p.nombre || '').trim()
+                            ? `<h3 class="text-base font-bold text-slate-900"><span class="font-medium text-slate-600">${esc(treatmentLabel(p.tratamiento))}:</span> ${esc(p.nombre.trim())}</h3>`
+                            : `<h3 class="text-base font-bold text-slate-900">Registro #${orderNum}</h3>`}
                           <span class="text-xs font-bold ${outcomeTextColor(outcome)}">${esc(outcomeLabel(outcome))}</span>
                         </div>
 
-                        <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-600">
-                          <span>${esc(treatmentLabel(p.tratamiento))}</span>
-                          ${p.edad ? `<span aria-hidden="true">·</span><span>${esc(p.edad)}</span>` : ''}
-                          ${p.procedencia ? `<span aria-hidden="true">·</span><span>${esc(p.procedencia)}</span>` : ''}
-                          <span aria-hidden="true">·</span>
-                          <span class="font-mono-num text-slate-800">Entrada: ${esc(fmt12(p.horaEntrada))}</span>
-                          <span aria-hidden="true">·</span>
-                          <span class="font-mono-num text-slate-800">Salida: ${p.horaSalida ? esc(fmt12(p.horaSalida)) : 'Pendiente'}</span>
-                        </div>
+                        ${metaItems.length > 0 ? `
+                          <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-600">
+                            ${metaItems.join('<span aria-hidden="true">·</span>')}
+                          </div>` : ''}
 
-                        <dl class="mt-2.5 grid grid-cols-1 gap-1.5 text-sm text-slate-700 sm:grid-cols-2">
-                          <div><dt class="inline font-semibold text-slate-900">Motivo:</dt> <dd class="inline">${esc(p.motivoVisita || 'No registrado')}</dd></div>
-                          ${p.observaciones ? `<div><dt class="inline font-semibold text-slate-900">Obs. ingreso:</dt> <dd class="inline">${esc(p.observaciones)}</dd></div>` : ''}
-                          ${p.medico ? `<div><dt class="inline font-semibold text-slate-900">Médico:</dt> <dd class="inline">${esc(p.medico)}</dd></div>` : ''}
-                          ${p.enfermera ? `<div><dt class="inline font-semibold text-slate-900">Enfermera:</dt> <dd class="inline">${esc(p.enfermera)}</dd></div>` : ''}
-                          ${p.diagnostico ? `<div class="sm:col-span-2"><dt class="inline font-semibold text-slate-900">Diagnóstico:</dt> <dd class="inline">${esc(p.diagnostico)}</dd></div>` : ''}
-                          ${p.observacionesSalida ? `<div class="sm:col-span-2"><dt class="inline font-semibold text-slate-900">Obs. salida:</dt> <dd class="inline">${esc(p.observacionesSalida)}</dd></div>` : ''}
-                        </dl>
+                        ${details.length > 0 ? `
+                          <dl class="mt-2.5 grid grid-cols-1 gap-1.5 text-sm text-slate-700 sm:grid-cols-2">
+                            ${details.join('')}
+                          </dl>` : ''}
                       </div>
 
                       <div class="flex flex-wrap items-center gap-2 shrink-0">
@@ -1875,12 +2141,9 @@
                           class="min-h-[40px] rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0">
                           Editar
                         </button>
-                        ${confirmingDel ? `
-                          <button type="button" data-action="confirm-delete-one" data-id="${esc(p.id)}" class="min-h-[40px] rounded-xl bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-700 whitespace-nowrap shrink-0">Confirmar borrado</button>
-                          <button type="button" data-action="cancel-delete-one" class="min-h-[40px] rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 whitespace-nowrap shrink-0">Cancelar</button>
-                        ` : `
-                          <button type="button" data-action="ask-delete-one" data-id="${esc(p.id)}" class="min-h-[40px] rounded-xl border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 whitespace-nowrap shrink-0">Eliminar</button>
-                        `}
+                        ${admin ? `
+                          <button type="button" data-action="open-delete-single" data-id="${esc(p.id)}" class="min-h-[40px] rounded-xl border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 whitespace-nowrap shrink-0">Eliminar</button>
+                        ` : ''}
                       </div>
                     </div>
                   </article>
@@ -1894,12 +2157,13 @@
     function renderIntakeView() {
       const f = state.intakeForm || createEmptyIntakeForm();
       const isEditing = Boolean(state.editingPatientId);
+      const formattedDate = formatIsoDateEs(f.fechaRegistro) || formatIsoDateEs(getTodayIsoDate());
       return `
         <section aria-label="Formato de entrada de paciente" class="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6">
-          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-slate-200 pb-4">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between pb-2">
             <div>
-              <h2 class="text-xl font-bold text-slate-900">${isEditing ? 'Editar registro de paciente' : 'Formato de entrada de paciente'}</h2>
-              <p class="mt-0.5 text-xs text-slate-600">Captura clínica rápida con reloj de 12 horas, sugerencias, dictado por voz y corrector ortográfico.</p>
+              <h2 class="text-xl font-bold text-slate-900">${isEditing ? 'Editar registro de paciente' : 'REGISTRO DE USUARIOS'}</h2>
+              <p class="mt-0.5 text-xs text-slate-600">Captura clínica rápida con reloj de 12 horas, fecha ajustable, dictado por voz y corrector ortográfico.</p>
             </div>
             <button type="button" data-action="spellcheck-intake"
               class="min-h-[42px] rounded-xl border border-teal-300 bg-teal-50 px-4 py-2 text-xs font-bold text-teal-900 hover:bg-teal-100 whitespace-nowrap shrink-0">
@@ -1910,6 +2174,29 @@
           ${state.formError ? `<div role="alert" class="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800">${esc(state.formError)}</div>` : ''}
 
           <form id="intake-form" class="mt-5 space-y-5" novalidate>
+            <div class="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5">
+              <div class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div class="text-[11px] font-bold uppercase tracking-wide text-slate-500">Fecha del registro</div>
+                  <div class="mt-0.5 font-mono-num text-sm font-bold text-slate-900">${esc(formattedDate)}</div>
+                </div>
+                <button type="button" data-action="toggle-edit-date"
+                  class="min-h-[38px] rounded-xl border border-slate-300 bg-white px-3.5 py-1.5 text-xs font-bold text-slate-800 hover:border-teal-600 hover:text-teal-900 whitespace-nowrap shrink-0">
+                  ${f.editingDate ? 'Cerrar fecha' : 'Modificar fecha'}
+                </button>
+              </div>
+              ${f.editingDate ? `
+                <div class="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-200 pt-3">
+                  <label for="f-fecha" class="sr-only">Seleccionar fecha del registro</label>
+                  <input id="f-fecha" data-intake-field="fechaRegistro" type="date" value="${esc(f.fechaRegistro || getTodayIsoDate())}"
+                    class="min-h-[40px] rounded-xl border border-slate-300 bg-white px-3 text-sm font-mono-num text-slate-900 focus:border-teal-700 focus:outline-none" />
+                  <button type="button" data-action="set-date-today"
+                    class="min-h-[40px] rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100">Hoy</button>
+                  <button type="button" data-action="toggle-edit-date"
+                    class="min-h-[40px] rounded-xl bg-teal-700 px-3.5 text-xs font-bold text-white hover:bg-teal-800">Listo</button>
+                </div>` : ''}
+            </div>
+
             <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div>
                 <label class="block text-xs font-bold text-slate-800 mb-1.5">Hora de entrada (formato 12 h)</label>
@@ -2181,7 +2468,7 @@
                 <div class="flex items-start justify-between gap-3 border-b border-slate-200 pb-3">
                   <div>
                     <h2 class="text-lg font-bold text-slate-900">Registrar salida de paciente</h2>
-                    <p class="text-xs text-slate-600">${esc(patient.nombre)} · Entrada: ${esc(fmt12(patient.horaEntrada))}</p>
+                    <p class="text-xs text-slate-600">${[patient.nombre ? esc(patient.nombre) : '', fmt12(patient.horaEntrada) ? `Entrada: ${esc(fmt12(patient.horaEntrada))}` : ''].filter(Boolean).join(' · ')}</p>
                   </div>
                   <button type="button" data-action="close-discharge" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Cerrar</button>
                 </div>
@@ -2277,7 +2564,7 @@
       if (state.whatsappModal) {
         const p = state.patients.find((x) => x.id === state.whatsappModal.patientId);
         if (p) {
-          const text = buildWhatsAppText(p, state.whatsappModal.type, state.shiftConfig.incluirCamposVaciosEnMensaje);
+          const text = buildWhatsAppText(p, state.whatsappModal.type);
           const groupUrl = state.shiftConfig.whatsappGroupUrl || DEFAULT_WHATSAPP_GROUP_URL;
           html += `
             <div class="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/60 p-3 sm:p-5">
@@ -2287,10 +2574,6 @@
                   <button type="button" data-action="close-whatsapp" class="rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700">Cerrar</button>
                 </div>
                 <pre id="wa-preview-text" class="mt-4 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-xl border border-slate-200 bg-slate-50 p-3.5 font-sans text-xs leading-relaxed text-slate-900">${esc(text)}</pre>
-                <label class="mt-3 flex items-center gap-2 text-xs text-slate-700">
-                  <input type="checkbox" data-action="toggle-wa-empty" ${state.shiftConfig.incluirCamposVaciosEnMensaje ? 'checked' : ''} class="h-4 w-4 rounded border-slate-300 text-teal-700" />
-                  <span>Incluir campos vacíos como "No registrado"</span>
-                </label>
                 <div class="mt-4 flex flex-wrap gap-2">
                   <button type="button" data-action="copy-wa-text" class="flex-1 min-h-[44px] rounded-xl bg-teal-700 px-4 py-2 text-xs font-bold text-white hover:bg-teal-800">Copiar mensaje</button>
                   <a href="${esc(groupUrl)}" target="_blank" rel="noopener noreferrer" class="inline-flex flex-1 min-h-[44px] items-center justify-center rounded-xl bg-emerald-700 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-800">Abrir grupo WhatsApp</a>
@@ -2305,15 +2588,21 @@
         const c = computeCounts(state.patients);
         html += `
           <div class="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/60 p-3 sm:p-5">
-            <div role="dialog" aria-modal="true" aria-label="Informe de guardia" class="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-5 sm:p-6">
+            <div role="dialog" aria-modal="true" aria-label="Informe del día" class="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-5 sm:p-6">
               <div class="flex items-center justify-between border-b border-slate-200 pb-3">
-                <h2 class="text-base font-bold text-slate-900">Informe de guardia y envío</h2>
+                <div>
+                  <h2 class="text-base font-bold text-slate-900">Informe del día y envío</h2>
+                  <p class="mt-0.5 text-[11px] text-slate-500">Orden cronológico: del primer registro al último · Solo datos ingresados</p>
+                </div>
                 <button type="button" data-action="close-report" class="rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700">Cerrar</button>
               </div>
               <div class="mt-4 grid grid-cols-3 gap-2 text-center text-xs">
-                <div class="rounded-xl border border-slate-200 bg-slate-50 p-2.5"><div class="text-slate-600">Total</div><div class="text-lg font-bold tabular-nums">${c.total}</div></div>
-                <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-2.5"><div class="text-emerald-900">Atendidos</div><div class="text-lg font-bold tabular-nums text-emerald-800">${c.atendidos}</div></div>
-                <div class="rounded-xl border border-amber-200 bg-amber-50 p-2.5"><div class="text-amber-900">Sin salida</div><div class="text-lg font-bold tabular-nums text-amber-900">${c.enAtencion}</div></div>
+                <div class="rounded-xl border border-slate-200 bg-slate-50 p-2"><div class="text-slate-600">Total</div><div class="text-lg font-bold tabular-nums">${c.total}</div></div>
+                <div class="rounded-xl border border-amber-200 bg-amber-50 p-2"><div class="text-amber-900">Activos</div><div class="text-lg font-bold tabular-nums text-amber-900">${c.enAtencion}</div></div>
+                <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-2"><div class="text-emerald-900">Atendidos</div><div class="text-lg font-bold tabular-nums text-emerald-800">${c.atendidos}</div></div>
+                <div class="rounded-xl border border-orange-200 bg-orange-50 p-2"><div class="text-orange-900">No esperó</div><div class="text-lg font-bold tabular-nums text-orange-800">${c.noEsperoTurno}</div></div>
+                <div class="rounded-xl border border-red-200 bg-red-50 p-2"><div class="text-red-900">No atendidos</div><div class="text-lg font-bold tabular-nums text-red-800">${c.noAtendidos}</div></div>
+                <div class="rounded-xl border border-blue-200 bg-blue-50 p-2"><div class="text-blue-900">Trasladados</div><div class="text-lg font-bold tabular-nums text-blue-800">${c.trasladados}</div></div>
               </div>
               <div class="mt-4">
                 <label for="wa-group-url" class="block text-xs font-bold text-slate-800 mb-1">Enlace del grupo de WhatsApp</label>
@@ -2323,8 +2612,8 @@
                 </div>
               </div>
               <div class="mt-4 flex flex-col gap-2">
-                <button type="button" data-action="download-pdf" class="min-h-[44px] rounded-xl bg-teal-700 px-4 py-2 text-xs font-bold text-white hover:bg-teal-800">Descargar informe PDF compacto (A4)</button>
-                <button type="button" data-action="copy-shift-summary" class="min-h-[44px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-800 hover:bg-slate-50">Copiar resumen de guardia para WhatsApp</button>
+                <button type="button" data-action="download-pdf" class="min-h-[44px] rounded-xl bg-teal-700 px-4 py-2 text-xs font-bold text-white hover:bg-teal-800">Descargar informe PDF (A4)</button>
+                <button type="button" data-action="copy-shift-summary" class="min-h-[44px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-800 hover:bg-slate-50">Copiar reporte del día para WhatsApp</button>
                 <a href="${esc(state.shiftConfig.whatsappGroupUrl)}" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-emerald-700 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-800">Abrir grupo de WhatsApp</a>
               </div>
             </div>
@@ -2363,45 +2652,69 @@
           </div>`;
       }
 
-      // Modal 5: Eliminación total (Solo cuenta administradora + Doble confirmación)
+      // Modal 5: Eliminación protegida (Solo administrador + contraseña de autorización)
       if (state.clearModal) {
         const cm = state.clearModal;
         const admin = isAdmin();
-        const canConfirm = admin && cm.checked && cm.phrase.trim().toUpperCase() === 'ELIMINAR TODO' && !cm.busy;
+        const isSingle = cm.mode === 'single';
+        const target = isSingle ? state.patients.find((p) => p.id === cm.patientId) : null;
+        const title = isSingle ? 'Eliminar registro de paciente' : 'Eliminar todos los registros del turno';
         html += `
           <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3 sm:p-5">
-            <div role="dialog" aria-modal="true" aria-label="Eliminar todos los registros" class="w-full max-w-lg rounded-2xl border border-red-200 bg-white p-5 sm:p-6">
+            <div role="dialog" aria-modal="true" aria-label="${esc(title)}" class="w-full max-w-lg rounded-2xl border border-red-200 bg-white p-5 sm:p-6">
               <div class="flex items-center justify-between border-b border-slate-200 pb-3">
-                <h2 class="text-base font-bold text-red-900">Eliminar todos los registros del turno</h2>
+                <h2 class="text-base font-bold text-red-900">${esc(title)}</h2>
                 <button type="button" data-action="close-clear" class="rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700">Cancelar</button>
               </div>
               ${!admin ? `
-                <p class="mt-4 text-sm text-red-800 font-medium">Acceso restringido: solo la cuenta administradora verificada (${ADMIN_EMAIL}) puede eliminar todos los registros de la base de datos compartida.</p>
+                <p class="mt-4 text-sm text-red-800 font-medium">Acceso restringido: solo cuentas administradoras autorizadas pueden eliminar registros de pacientes.</p>
                 <div class="mt-4 flex justify-end"><button type="button" data-action="close-clear" class="min-h-[42px] rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white">Entendido</button></div>
+              ` : isSingle && !target ? `
+                <p class="mt-4 text-sm text-slate-700">Este registro ya no existe en la base de datos.</p>
+                <div class="mt-4 flex justify-end"><button type="button" data-action="close-clear" class="min-h-[42px] rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white">Cerrar</button></div>
+              ` : cm.step === 'password' ? `
+                <form id="delete-passcode-form" class="mt-4 space-y-4">
+                  <p class="text-sm text-slate-700">
+                    ${isSingle
+                      ? `Para eliminar el registro${target?.nombre ? ` de <strong>${esc(target.nombre)}</strong>` : ''}, ingresa la contraseña de autorización.`
+                      : `Para eliminar el historial completo de <strong>${state.patients.length}</strong> registros, ingresa la contraseña de autorización.`}
+                  </p>
+                  <div>
+                    <label for="delete-passcode" class="block text-xs font-bold text-slate-800 mb-1.5">Contraseña de autorización</label>
+                    <input id="delete-passcode" type="password" inputmode="numeric" autocomplete="off" value="${esc(cm.passcode)}" placeholder="Ingresa la contraseña"
+                      class="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 text-sm font-mono-num text-slate-900 focus:border-red-600 focus:outline-none" />
+                  </div>
+                  ${cm.error ? `<div role="alert" class="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-800">${esc(cm.error)}</div>` : ''}
+                  <div class="flex justify-end gap-2 pt-1">
+                    <button type="button" data-action="close-clear" class="min-h-[42px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700">Cancelar</button>
+                    <button type="submit" ${cm.busy ? 'disabled' : ''} class="min-h-[42px] rounded-xl bg-red-600 px-5 py-2 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50">
+                      ${cm.busy ? 'Verificando...' : 'Validar contraseña'}
+                    </button>
+                  </div>
+                </form>
               ` : `
-                <p class="mt-3 text-sm text-slate-700">
-                  Esta acción eliminará permanentemente los <strong>${state.patients.length}</strong> registros actuales para todos los dispositivos conectados y quedará registrada en la bitácora de auditoría.
-                </p>
-                <div class="mt-3 flex flex-wrap gap-2">
-                  <button type="button" data-action="download-pdf" class="min-h-[38px] rounded-lg border border-slate-300 bg-slate-50 px-3 text-xs font-semibold text-slate-800 hover:bg-slate-100">1. Descargar PDF antes</button>
-                  <button type="button" data-action="export-json" class="min-h-[38px] rounded-lg border border-slate-300 bg-slate-50 px-3 text-xs font-semibold text-slate-800 hover:bg-slate-100">2. Exportar respaldo JSON</button>
-                </div>
-                <label class="mt-4 flex items-start gap-2.5 text-xs text-slate-800">
-                  <input type="checkbox" data-action="clear-toggle-check" ${cm.checked ? 'checked' : ''} class="mt-0.5 h-4 w-4 rounded border-slate-300 text-red-600" />
-                  <span>Confirmo como responsable administrador (<strong>${esc(state.user.email)}</strong>) que deseo vaciar el turno completo y que esta acción no se puede deshacer.</span>
-                </label>
-                <div class="mt-3">
-                  <label for="clear-phrase" class="block text-xs font-bold text-slate-800 mb-1">Segunda confirmación: escribe <span class="font-mono-num text-red-800">ELIMINAR TODO</span></label>
-                  <input id="clear-phrase" type="text" value="${esc(cm.phrase)}" placeholder="ELIMINAR TODO" autocomplete="off"
-                    class="w-full min-h-[42px] rounded-xl border border-slate-300 px-3 text-sm font-mono-num text-slate-900 focus:border-red-600 focus:outline-none" />
-                </div>
-                ${cm.error ? `<p class="mt-2 text-xs font-semibold text-red-700">${esc(cm.error)}</p>` : ''}
-                <div class="mt-5 flex justify-end gap-2">
-                  <button type="button" data-action="close-clear" class="min-h-[42px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700">Cancelar</button>
-                  <button type="button" data-action="execute-clear-all" ${canConfirm ? '' : 'disabled'}
-                    class="min-h-[42px] rounded-xl bg-red-600 px-5 py-2 text-xs font-bold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40">
-                    ${cm.busy ? 'Eliminando...' : 'Confirmar eliminación total'}
-                  </button>
+                <div class="mt-4 space-y-4">
+                  <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-xs font-semibold text-emerald-900">
+                    Contraseña verificada por ${esc(state.user.email)}. Confirma la eliminación definitiva.
+                  </div>
+                  <p class="text-sm text-slate-700">
+                    ${isSingle
+                      ? `Se eliminará permanentemente el registro${target?.nombre ? ` de <strong>${esc(target.nombre)}</strong>` : ''} para todos los dispositivos conectados. Esta acción no se puede deshacer.`
+                      : `Se eliminarán permanentemente los <strong>${state.patients.length}</strong> registros actuales para todos los dispositivos conectados. Esta acción no se puede deshacer.`}
+                  </p>
+                  ${!isSingle ? `
+                    <div class="flex flex-wrap gap-2">
+                      <button type="button" data-action="download-pdf" class="min-h-[38px] rounded-lg border border-slate-300 bg-slate-50 px-3 text-xs font-semibold text-slate-800 hover:bg-slate-100">Descargar PDF antes</button>
+                      <button type="button" data-action="export-json" class="min-h-[38px] rounded-lg border border-slate-300 bg-slate-50 px-3 text-xs font-semibold text-slate-800 hover:bg-slate-100">Exportar respaldo JSON</button>
+                    </div>` : ''}
+                  ${cm.error ? `<div role="alert" class="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-800">${esc(cm.error)}</div>` : ''}
+                  <div class="flex justify-end gap-2 pt-1">
+                    <button type="button" data-action="close-clear" class="min-h-[42px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700">Cancelar</button>
+                    <button type="button" data-action="execute-protected-delete" ${cm.busy ? 'disabled' : ''}
+                      class="min-h-[42px] rounded-xl bg-red-600 px-5 py-2 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50">
+                      ${cm.busy ? 'Eliminando...' : (isSingle ? 'Confirmar eliminación' : 'Confirmar eliminación total')}
+                    </button>
+                  </div>
                 </div>
               `}
             </div>
@@ -2473,13 +2786,24 @@
                 </div>
               </div>
 
-              <div class="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
-                <div class="rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5"><div class="text-xs font-semibold text-slate-600">Total</div><div class="mt-0.5 font-display text-2xl font-bold tabular-nums text-slate-900">${c.total}</div></div>
-                <div class="rounded-xl border border-amber-200 bg-amber-50/50 px-3.5 py-2.5"><div class="text-xs font-semibold text-amber-900">Activos</div><div class="mt-0.5 font-display text-2xl font-bold tabular-nums text-amber-900">${c.enAtencion}</div></div>
-                <div class="rounded-xl border border-emerald-200 bg-emerald-50/50 px-3.5 py-2.5"><div class="text-xs font-semibold text-emerald-900">Atendidos</div><div class="mt-0.5 font-display text-2xl font-bold tabular-nums text-emerald-800">${c.atendidos}</div></div>
-                <div class="rounded-xl border border-orange-200 bg-orange-50/50 px-3.5 py-2.5"><div class="text-xs font-semibold text-orange-900">No esperó</div><div class="mt-0.5 font-display text-2xl font-bold tabular-nums text-orange-800">${c.noEsperoTurno}</div></div>
-                <div class="rounded-xl border border-red-200 bg-red-50/50 px-3.5 py-2.5"><div class="text-xs font-semibold text-red-900">No atendidos</div><div class="mt-0.5 font-display text-2xl font-bold tabular-nums text-red-800">${c.noAtendidos}</div></div>
-                <div class="rounded-xl border border-blue-200 bg-blue-50/50 px-3.5 py-2.5"><div class="text-xs font-semibold text-blue-900">Trasladados</div><div class="mt-0.5 font-display text-2xl font-bold tabular-nums text-blue-800">${c.trasladados}</div></div>
+              <div class="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6" role="group" aria-label="Filtrar pacientes por categoría">
+                ${[
+                  { id: 'todos', label: 'Total', count: c.total, base: 'border-slate-200 bg-slate-50/70 hover:border-slate-400', active: 'border-slate-900 bg-slate-900 text-white ring-2 ring-slate-900/20', labelCls: 'text-slate-600', numCls: 'text-slate-900' },
+                  { id: 'en_atencion', label: 'Activos', count: c.enAtencion, base: 'border-amber-200 bg-amber-50/50 hover:border-amber-400', active: 'border-amber-700 bg-amber-100 ring-2 ring-amber-600/30', labelCls: 'text-amber-900', numCls: 'text-amber-900' },
+                  { id: 'atendido', label: 'Atendidos', count: c.atendidos, base: 'border-emerald-200 bg-emerald-50/50 hover:border-emerald-400', active: 'border-emerald-700 bg-emerald-100 ring-2 ring-emerald-600/30', labelCls: 'text-emerald-900', numCls: 'text-emerald-800' },
+                  { id: 'no_espero_turno', label: 'No esperó', count: c.noEsperoTurno, base: 'border-orange-200 bg-orange-50/50 hover:border-orange-400', active: 'border-orange-700 bg-orange-100 ring-2 ring-orange-600/30', labelCls: 'text-orange-900', numCls: 'text-orange-800' },
+                  { id: 'no_atendido', label: 'No atendidos', count: c.noAtendidos, base: 'border-red-200 bg-red-50/50 hover:border-red-400', active: 'border-red-700 bg-red-100 ring-2 ring-red-600/30', labelCls: 'text-red-900', numCls: 'text-red-800' },
+                  { id: 'trasladado', label: 'Trasladados', count: c.trasladados, base: 'border-blue-200 bg-blue-50/50 hover:border-blue-400', active: 'border-blue-700 bg-blue-100 ring-2 ring-blue-600/30', labelCls: 'text-blue-900', numCls: 'text-blue-800' }
+                ].map((card) => {
+                  const selected = state.activeView === 'pacientes' && state.statusFilter === card.id;
+                  const darkSelected = selected && card.id === 'todos';
+                  return `
+                    <button type="button" data-action="select-summary-card" data-status="${card.id}" aria-pressed="${selected ? 'true' : 'false'}"
+                      class="rounded-xl border px-3.5 py-2.5 text-left transition-all cursor-pointer ${selected ? card.active : card.base}">
+                      <div class="text-xs font-semibold ${darkSelected ? 'text-slate-200' : card.labelCls}">${card.label}</div>
+                      <div class="mt-0.5 font-display text-2xl font-bold tabular-nums ${darkSelected ? 'text-white' : card.numCls}">${card.count}</div>
+                    </button>`;
+                }).join('')}
               </div>
 
               <div class="mt-5 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
@@ -2574,10 +2898,29 @@
       }
     }
 
-    document.addEventListener('submit', (e) => {
+    document.addEventListener('submit', async (e) => {
       if (e.target && e.target.id === 'intake-form') {
         e.preventDefault();
         void submitIntakeForm(false);
+        return;
+      }
+      if (e.target && e.target.id === 'delete-passcode-form') {
+        e.preventDefault();
+        if (!state.clearModal || !isAdmin() || state.clearModal.busy) return;
+        state.clearModal.busy = true;
+        state.clearModal.error = '';
+        render();
+        const result = await verifyDeletePasscode(state.clearModal.passcode);
+        if (!state.clearModal) return;
+        state.clearModal.busy = false;
+        if (result.ok) {
+          state.clearModal.step = 'confirm';
+          state.clearModal.passcode = '';
+          state.clearModal.error = '';
+        } else {
+          state.clearModal.error = result.message;
+        }
+        render();
       }
     });
 
@@ -2596,6 +2939,7 @@
 
       if (target.dataset.intakeField && state.intakeForm) {
         state.intakeForm[target.dataset.intakeField] = target.value;
+        if (target.dataset.intakeField === 'fechaRegistro') render();
         return;
       }
 
@@ -2611,18 +2955,21 @@
         return;
       }
 
-      if (target.id === 'clear-phrase' && state.clearModal) {
-        state.clearModal.phrase = target.value;
-        const pos = target.selectionStart;
-        render();
-        const el = document.getElementById('clear-phrase');
-        if (el) { el.focus(); if (pos !== null) el.setSelectionRange(pos, pos); }
+      if (target.id === 'delete-passcode' && state.clearModal) {
+        state.clearModal.passcode = target.value;
+        state.clearModal.error = '';
       }
     });
 
     document.addEventListener('change', async (e) => {
       const target = e.target;
       if (!(target instanceof HTMLElement)) return;
+
+      if (target.dataset.intakeField === 'fechaRegistro' && state.intakeForm) {
+        state.intakeForm.fechaRegistro = normalizeIsoDate(target.value) || getTodayIsoDate();
+        render();
+        return;
+      }
 
       if (target.dataset.timePart) {
         const [prefix, part] = target.dataset.timePart.split(':');
@@ -2638,20 +2985,6 @@
 
       if (target.dataset.dischargeField === 'doctorTitle' && state.dischargeModal) {
         state.dischargeModal.doctorTitle = target.value === 'DRA.' ? 'DRA.' : 'DR.';
-        render();
-        return;
-      }
-
-      if (target.dataset.action === 'toggle-wa-empty') {
-        const checked = target.checked;
-        state.shiftConfig.incluirCamposVaciosEnMensaje = checked;
-        render();
-        await saveShiftConfigCloud({ incluirCamposVaciosEnMensaje: checked });
-        return;
-      }
-
-      if (target.dataset.action === 'clear-toggle-check' && state.clearModal) {
-        state.clearModal.checked = target.checked;
         render();
         return;
       }
@@ -2735,12 +3068,33 @@
           break;
         case 'clear-search':
           state.searchQuery = ''; render(); break;
+        case 'select-summary-card': {
+          const nextStatus = btn.dataset.status || 'todos';
+          stopVoice();
+          state.editingPatientId = null;
+          state.activeView = 'pacientes';
+          state.statusFilter = (state.statusFilter === nextStatus && nextStatus !== 'todos') ? 'todos' : nextStatus;
+          render();
+          break;
+        }
         case 'filter-status':
           state.statusFilter = btn.dataset.status || 'todos'; render(); break;
         case 'reset-filters':
           state.searchQuery = ''; state.statusFilter = 'todos'; render(); break;
         case 'dismiss-conflict':
           state.conflictNotice = ''; render(); break;
+        case 'toggle-edit-date':
+          if (state.intakeForm) {
+            state.intakeForm.editingDate = !state.intakeForm.editingDate;
+            render();
+          }
+          break;
+        case 'set-date-today':
+          if (state.intakeForm) {
+            state.intakeForm.fechaRegistro = getTodayIsoDate();
+            render();
+          }
+          break;
         case 'set-tratamiento':
           if (state.intakeForm) { state.intakeForm.tratamiento = btn.dataset.val || 'paciente'; render(); }
           break;
@@ -2833,15 +3187,14 @@
           if (p) openEditIntakeForm(p);
           break;
         }
-        case 'ask-delete-one':
-          state.deleteConfirmPatientId = btn.dataset.id; render(); break;
-        case 'cancel-delete-one':
-          state.deleteConfirmPatientId = null; render(); break;
-        case 'confirm-delete-one': {
+        case 'open-delete-single': {
+          if (!isAdmin()) break;
           const p = state.patients.find((x) => x.id === btn.dataset.id);
-          state.deleteConfirmPatientId = null;
-          if (p) { await deleteSinglePatientCloud(p); showToast('Registro eliminado de la base compartida.'); }
-          render();
+          if (p) {
+            state.clearModal = { mode: 'single', patientId: p.id, step: 'password', passcode: '', busy: false, error: '' };
+            render();
+            setTimeout(() => document.getElementById('delete-passcode')?.focus(), 20);
+          }
           break;
         }
         case 'open-discharge': {
@@ -2925,23 +3278,48 @@
         case 'export-json':
           exportBackupJson(state.patients); break;
         case 'open-clear-modal':
-          state.clearModal = { checked: false, phrase: '', busy: false, error: '' }; render(); break;
+          if (!isAdmin()) break;
+          state.clearModal = { mode: 'all', patientId: null, step: 'password', passcode: '', busy: false, error: '' };
+          render();
+          setTimeout(() => document.getElementById('delete-passcode')?.focus(), 20);
+          break;
         case 'close-clear':
           state.clearModal = null; render(); break;
-        case 'execute-clear-all': {
-          if (!state.clearModal || !isAdmin()) break;
-          state.clearModal.busy = true; state.clearModal.error = ''; render();
+        case 'execute-protected-delete': {
+          if (!state.clearModal || !isAdmin() || state.clearModal.step !== 'confirm') break;
+          const cm = state.clearModal;
+          cm.busy = true;
+          cm.error = '';
+          render();
           try {
-            const removed = await deleteAllPatientsCloud(state.patients);
-            state.clearModal = null;
-            state.editingPatientId = null;
-            state.dischargeModal = null;
-            state.whatsappModal = null;
-            state.activeView = 'pacientes';
-            showToast(`Se eliminaron ${removed} registros y quedó registrado en auditoría.`);
+            const verifier = state.user?.email || '';
+            if (cm.mode === 'single') {
+              const p = state.patients.find((x) => x.id === cm.patientId);
+              if (p) {
+                await deleteSinglePatientCloud(p, verifier);
+                if (state.editingPatientId === p.id) { state.editingPatientId = null; state.intakeForm = null; }
+                if (state.dischargeModal?.patientId === p.id) state.dischargeModal = null;
+                if (state.whatsappModal?.patientId === p.id) state.whatsappModal = null;
+              }
+              state.clearModal = null;
+              showToast('Registro eliminado de la base compartida.');
+            } else {
+              const removed = await deleteAllPatientsCloud(state.patients, verifier);
+              state.clearModal = null;
+              state.editingPatientId = null;
+              state.intakeForm = null;
+              state.dischargeModal = null;
+              state.whatsappModal = null;
+              state.activeView = 'pacientes';
+              showToast(`Se eliminaron ${removed} registros y quedó registrado en auditoría.`);
+            }
           } catch {
-            state.clearModal.busy = false;
-            state.clearModal.error = 'No se pudieron eliminar todos los registros.';
+            if (state.clearModal) {
+              state.clearModal.busy = false;
+              state.clearModal.error = cm.mode === 'single'
+                ? 'No se pudo eliminar el registro.'
+                : 'No se pudieron eliminar todos los registros.';
+            }
           }
           render();
           break;

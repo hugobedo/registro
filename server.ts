@@ -190,6 +190,12 @@ function timingSafeVerify(passcode: string, stored: { salt: string; hash: string
   return crypto.timingSafeEqual(derived, expected);
 }
 
+// Salted scrypt verifier for the configured institutional delete passcode (overrideable via DELETE_RECORDS_PASSWORD)
+const DEFAULT_PASSCODE_RECORD: { salt: string; hash: string } = {
+  salt: 'acemed_del_v2_8f4a92c1e6b30d57',
+  hash: 'bab2d3e19241685dcb186c54a91dff767b62f68926417fde9c6731327537a7f0c5844a8f33ca36be1e78decd209a0e3754829a797aeefb51596090b3604c61e2',
+};
+
 // Compute hashed env secret at boot so plaintext is never compared directly
 const envPasscode = (process.env.DELETE_RECORDS_PASSWORD || '').trim();
 const envPasscodeHash = envPasscode.length > 0 ? hashPasscode(envPasscode) : null;
@@ -239,8 +245,8 @@ function saveRuntimePasscode(passcode: string, actorEmail: string): void {
 
 function getActivePasscodeSource(): {
   configured: boolean;
-  source: 'env' | 'server_setup' | 'unconfigured';
-  hashRecord: { salt: string; hash: string } | null;
+  source: 'env' | 'server_setup' | 'default';
+  hashRecord: { salt: string; hash: string };
 } {
   if (envPasscodeHash) {
     return { configured: true, source: 'env', hashRecord: envPasscodeHash };
@@ -249,7 +255,7 @@ function getActivePasscodeSource(): {
   if (runtime) {
     return { configured: true, source: 'server_setup', hashRecord: runtime };
   }
-  return { configured: false, source: 'unconfigured', hashRecord: null };
+  return { configured: true, source: 'default', hashRecord: DEFAULT_PASSCODE_RECORD };
 }
 
 async function requireFirebaseAuth(

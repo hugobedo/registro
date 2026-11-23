@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Mic, RotateCcw, Save, SpellCheck, X } from 'lucide-react';
+import { Calendar, Mic, RotateCcw, Save, SpellCheck, X } from 'lucide-react';
 import {
   EXIT_OUTCOME_OPTIONS,
   FIELD_LABELS,
@@ -15,7 +15,14 @@ import {
   type PatientRecord,
   type ReviewableFieldKey,
 } from '../types/patient';
-import { getCurrentTime24h, normalizeTime24h } from '../utils/time';
+import {
+  extractIsoDateFromTimestamp,
+  formatIsoDateEs,
+  getCurrentTime24h,
+  getTodayIsoDate,
+  normalizeIsoDate,
+  normalizeTime24h,
+} from '../utils/time';
 import {
   detectDoctorTitle,
   formatDoctorName,
@@ -38,6 +45,7 @@ interface PatientFormProps {
 
 function createEmptyFormValues(): PatientFormValues {
   return {
+    fechaRegistro: getTodayIsoDate(),
     horaEntrada: getCurrentTime24h(),
     horaSalida: '',
     estadoEgreso: 'en_atencion',
@@ -56,6 +64,10 @@ function createEmptyFormValues(): PatientFormValues {
 
 function mapPatientToFormValues(patient: PatientRecord): PatientFormValues {
   return {
+    fechaRegistro:
+      normalizeIsoDate(patient.fechaRegistro) ||
+      extractIsoDateFromTimestamp(patient.createdAt) ||
+      getTodayIsoDate(),
     horaEntrada: normalizeTime24h(patient.horaEntrada),
     horaSalida: normalizeTime24h(patient.horaSalida),
     estadoEgreso: getPatientOutcome(patient),
@@ -97,6 +109,7 @@ export function PatientForm({
   const [doctorTitle, setDoctorTitle] = useState<DoctorTitle>(() =>
     editingPatient ? detectDoctorTitle(editingPatient.medico, 'DR.') : 'DR.'
   );
+  const [editingDate, setEditingDate] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const motivoTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const voice = useVoiceDictation();
@@ -109,6 +122,7 @@ export function PatientForm({
       setValues(createEmptyFormValues());
       setDoctorTitle('DR.');
     }
+    setEditingDate(false);
     setValidationError(null);
     voice.stopDictation();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -224,6 +238,7 @@ export function PatientForm({
     await onSave(
       {
         ...values,
+        fechaRegistro: normalizeIsoDate(values.fechaRegistro) || getTodayIsoDate(),
         horaEntrada: normalizeTime24h(values.horaEntrada),
         horaSalida: normalizedHoraSalida,
         estadoEgreso: resolvedOutcome,
@@ -236,6 +251,7 @@ export function PatientForm({
     if (!editingPatient) {
       setValues(createEmptyFormValues());
       setDoctorTitle('DR.');
+      setEditingDate(false);
     }
   };
 
@@ -243,6 +259,7 @@ export function PatientForm({
     voice.stopDictation();
     setValues(createEmptyFormValues());
     setDoctorTitle('DR.');
+    setEditingDate(false);
     setValidationError(null);
   };
 
@@ -254,10 +271,10 @@ export function PatientForm({
       aria-labelledby="form-heading"
       className="mx-auto w-full max-w-3xl rounded-2xl border border-slate-200 bg-white p-5 sm:p-7 shadow-xs"
     >
-      <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex flex-col gap-3 pb-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 id="form-heading" className="text-xl font-bold text-slate-900">
-            {editingPatient ? 'Editar registro de paciente' : 'Formato de entrada'}
+            {editingPatient ? 'Editar registro de paciente' : 'REGISTRO DE USUARIOS'}
           </h2>
           <p className="mt-1 text-sm text-slate-600">
             {editingPatient
@@ -330,6 +347,74 @@ export function PatientForm({
         className="mt-5 space-y-5"
         noValidate
       >
+        {/* Fecha del registro con botón Modificar fecha */}
+        <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 sm:p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2.5">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-teal-700">
+                <Calendar className="h-4 w-4" aria-hidden="true" />
+              </div>
+              <div>
+                <div className="text-xs font-semibold text-slate-600">Fecha de registro</div>
+                <div className="font-mono text-sm font-bold tabular-nums text-slate-900">
+                  {formatIsoDateEs(values.fechaRegistro) || formatIsoDateEs(getTodayIsoDate())}
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setEditingDate((prev) => !prev)}
+              aria-expanded={editingDate}
+              className="inline-flex min-h-[40px] items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-teal-700/40 bg-white px-3.5 py-1.5 text-xs font-semibold text-teal-900 transition-colors hover:bg-teal-50"
+            >
+              <Calendar className="h-3.5 w-3.5 text-teal-700" aria-hidden="true" />
+              <span>{editingDate ? 'Cerrar fecha' : 'Modificar fecha'}</span>
+            </button>
+          </div>
+
+          {editingDate && (
+            <div className="mt-3 flex flex-wrap items-end gap-2 border-t border-slate-200 pt-3">
+              <div className="min-w-[190px] flex-1">
+                <label
+                  htmlFor="fechaRegistro"
+                  className="block text-xs font-semibold text-slate-700"
+                >
+                  Selecciona la fecha del registro
+                </label>
+                <input
+                  id="fechaRegistro"
+                  type="date"
+                  value={values.fechaRegistro}
+                  onChange={(e) => {
+                    const nextDate = normalizeIsoDate(e.target.value);
+                    if (nextDate) {
+                      updateField('fechaRegistro', nextDate);
+                    }
+                  }}
+                  className="mt-1 min-h-[42px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm text-slate-900 focus:border-teal-700"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={() => updateField('fechaRegistro', getTodayIsoDate())}
+                className="inline-flex min-h-[42px] items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+              >
+                Hoy
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setEditingDate(false)}
+                className="inline-flex min-h-[42px] items-center justify-center rounded-lg bg-teal-700 px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-teal-800"
+              >
+                Listo
+              </button>
+            </div>
+          )}
+        </div>
+
         {/* Hora de entrada + Encabezado en mensaje */}
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
           <div>

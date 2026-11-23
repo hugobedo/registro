@@ -32,6 +32,7 @@ export interface PatientRecord {
   workspaceId?: string;
   createdAt: string;
   updatedAt: string;
+  fechaRegistro: string;
   horaEntrada: string;
   horaSalida: string;
   estadoEgreso: PatientOutcome;
@@ -53,6 +54,7 @@ export interface PatientRecord {
 }
 
 export interface PatientFormValues {
+  fechaRegistro: string;
   horaEntrada: string;
   horaSalida: string;
   estadoEgreso: PatientOutcome;
@@ -130,7 +132,7 @@ export interface BackupPayload {
 
 export interface DeleteAuthStatus {
   configured: boolean;
-  source: 'env' | 'server_setup' | 'unconfigured';
+  source: 'env' | 'server_setup' | 'default' | 'unconfigured';
   isAdmin: boolean;
 }
 

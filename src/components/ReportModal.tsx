@@ -80,8 +80,8 @@ export function ReportModal({
               Informe de guardia (PDF, respaldo y WhatsApp)
             </h2>
             <p className="mt-1 text-sm text-slate-600">
-              Descarga el informe PDF A4 compacto en formato de 12 horas o compártelo en el grupo
-              de WhatsApp configurado.
+              Descarga el informe PDF A4 ordenado del primer registro al último (solo con datos
+              completados) o compártelo en el grupo de WhatsApp.
             </p>
           </div>
           <button
@@ -101,11 +101,11 @@ export function ReportModal({
 
             <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 border-t border-slate-200 pt-3 text-xs font-semibold tabular-nums sm:grid-cols-3">
               <div className="text-slate-900">Total: {counts.total}</div>
+              <div className="text-amber-800">Activos: {counts.enAtencion}</div>
               <div className="text-emerald-800">Atendidos: {counts.atendidos}</div>
-              <div className="text-orange-800">No esperó turno: {counts.noEsperoTurno}</div>
+              <div className="text-orange-800">No esperó: {counts.noEsperoTurno}</div>
               <div className="text-red-800">No atendidos: {counts.noAtendidos}</div>
               <div className="text-blue-800">Trasladados: {counts.trasladados}</div>
-              <div className="text-amber-800">Sin salida: {counts.enAtencion}</div>
             </div>
           </div>
 

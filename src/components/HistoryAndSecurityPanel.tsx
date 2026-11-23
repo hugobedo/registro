@@ -660,36 +660,38 @@ export function HistoryAndSecurityPanel({
         </section>
       )}
 
-      {/* Zona protegida: Eliminar todos los registros */}
-      <section className="rounded-2xl border border-red-200 bg-white p-5 sm:p-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-700">
-              <ShieldAlert className="h-5 w-5" aria-hidden="true" />
+      {/* Zona protegida: Eliminar todos los registros (solo administradores) */}
+      {isAdmin && (
+        <section className="rounded-2xl border border-red-200 bg-white p-5 sm:p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-700">
+                <ShieldAlert className="h-5 w-5" aria-hidden="true" />
+              </div>
+              <div>
+                <h2 className="text-base font-bold text-slate-900">
+                  Eliminar todos los registros del turno
+                </h2>
+                <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                  Acción exclusiva para administradores, protegida con contraseña de autorización y
+                  registro en auditoría. El encargado de turno permanente (
+                  <strong>{DEFAULT_SHIFT_SUPERVISOR}</strong>) se conserva siempre.
+                </p>
+              </div>
             </div>
-            <div>
-              <h2 className="text-base font-bold text-slate-900">
-                Eliminar todos los registros del turno
-              </h2>
-              <p className="mt-1 text-xs leading-relaxed text-slate-600">
-                Acción protegida con contraseña validada en el servidor, doble confirmación
-                obligatoria y registro en auditoría. El encargado de turno permanente (
-                <strong>{DEFAULT_SHIFT_SUPERVISOR}</strong>) se conserva siempre.
-              </p>
-            </div>
-          </div>
 
-          <button
-            type="button"
-            onClick={onOpenClearModal}
-            disabled={patients.length === 0}
-            className="inline-flex min-h-[44px] items-center justify-center gap-2 whitespace-nowrap shrink-0 rounded-xl bg-red-700 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-red-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-          >
-            <Trash2 className="h-4 w-4" aria-hidden="true" />
-            <span>Eliminar todos los registros</span>
-          </button>
-        </div>
-      </section>
+            <button
+              type="button"
+              onClick={onOpenClearModal}
+              disabled={patients.length === 0}
+              className="inline-flex min-h-[44px] items-center justify-center gap-2 whitespace-nowrap shrink-0 rounded-xl bg-red-700 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-red-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+            >
+              <Trash2 className="h-4 w-4" aria-hidden="true" />
+              <span>Eliminar todos los registros</span>
+            </button>
+          </div>
+        </section>
+      )}
 
       {/* Historial de auditoría */}
       <section className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6">

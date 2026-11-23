@@ -99,6 +99,27 @@ export function compareByEntryTime(
   return a.createdAt.localeCompare(b.createdAt);
 }
 
+/**
+ * Orden cronológico exacto de registro: del primero que se subió al último.
+ */
+export function compareByRegistrationOrder(
+  a: { createdAt: string; fechaRegistro?: string; horaEntrada?: string; id?: string },
+  b: { createdAt: string; fechaRegistro?: string; horaEntrada?: string; id?: string }
+): number {
+  const timeA = Date.parse(a.createdAt);
+  const timeB = Date.parse(b.createdAt);
+  if (!Number.isNaN(timeA) && !Number.isNaN(timeB) && timeA !== timeB) {
+    return timeA - timeB;
+  }
+  const isoDiff = (a.createdAt || '').localeCompare(b.createdAt || '');
+  if (isoDiff !== 0) return isoDiff;
+  const dateDiff = (a.fechaRegistro || '').localeCompare(b.fechaRegistro || '');
+  if (dateDiff !== 0) return dateDiff;
+  const entryDiff = timeToMinutes(a.horaEntrada || '') - timeToMinutes(b.horaEntrada || '');
+  if (entryDiff !== 0) return entryDiff;
+  return (a.id || '').localeCompare(b.id || '');
+}
+
 export function formatReportDateEs(date: Date = new Date()): string {
   return new Intl.DateTimeFormat('es-MX', {
     weekday: 'long',
@@ -122,3 +143,36 @@ export function getIsoDateFilename(date: Date = new Date()): string {
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
+
+export function getTodayIsoDate(date: Date = new Date()): string {
+  return getIsoDateFilename(date);
+}
+
+export function normalizeIsoDate(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (!match) return '';
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31 || year < 2000 || year > 2100) {
+    return '';
+  }
+  return trimmed;
+}
+
+export function extractIsoDateFromTimestamp(iso: string): string {
+  if (!iso) return '';
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return getIsoDateFilename(parsed);
+}
+
+export function formatIsoDateEs(isoDate: string): string {
+  const normalized = normalizeIsoDate(isoDate);
+  if (!normalized) return '';
+  const [year, month, day] = normalized.split('-');
+  return `${day}/${month}/${year}`;
+}
+
