@@ -1,6 +1,7 @@
 import { DEFAULT_SHIFT_SUPERVISOR, DEFAULT_WHATSAPP_GROUP_URL } from '../config/labels';
 import {
   isExitOutcome,
+  isHospitalizationDischargeType,
   type BackupPayload,
   type PatientOutcome,
   type PatientRecord,
@@ -50,9 +51,13 @@ export function sanitizePatientRecord(raw: unknown): PatientRecord | null {
     createdAt,
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : createdAt,
     fechaRegistro,
+    fechaSalida: normalizeIsoDate(item.fechaSalida),
     horaEntrada: typeof item.horaEntrada === 'string' ? item.horaEntrada : '',
     horaSalida,
     estadoEgreso: resolveStoredOutcome(item.estadoEgreso, horaSalida),
+    tipoAltaHospitalizacion: isHospitalizationDischargeType(item.tipoAltaHospitalizacion)
+      ? item.tipoAltaHospitalizacion
+      : '',
     destinoTraslado: typeof item.destinoTraslado === 'string' ? item.destinoTraslado : '',
     tratamiento: isValidTreatment(item.tratamiento) ? item.tratamiento : 'paciente',
     nombre: typeof item.nombre === 'string' ? item.nombre : '',

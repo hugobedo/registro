@@ -2,6 +2,7 @@ import {
   DEFAULT_SHIFT_SUPERVISOR,
   DEFAULT_WHATSAPP_GROUP_URL,
   FIELD_LABELS,
+  getHospitalizationDischargeLabel,
   getOutcomeLabel,
   getTreatmentHeader,
 } from '../config/labels';
@@ -72,12 +73,16 @@ export function buildSalidaMessage(
 ): string {
   const outcome = getPatientOutcome(patient);
   const outcomeValue = outcome === 'en_atencion' ? '' : getOutcomeLabel(outcome);
+  const dischargeTypeLabel = getHospitalizationDischargeLabel(patient.tipoAltaHospitalizacion);
+  const exitDateFormatted = formatIsoDateEs(patient.fechaSalida);
 
   const lines: MessageFieldLine[] = [
     { label: FIELD_LABELS.horaEntrada, value: formatTime12h(patient.horaEntrada) },
     { label: FIELD_LABELS.horaSalida, value: formatTime12h(patient.horaSalida) },
     { label: 'Fecha', value: formatIsoDateEs(patient.fechaRegistro) },
+    { label: FIELD_LABELS.fechaSalida, value: exitDateFormatted },
     { label: FIELD_LABELS.estadoEgreso, value: outcomeValue },
+    { label: FIELD_LABELS.tipoAltaHospitalizacion, value: dischargeTypeLabel },
     { label: FIELD_LABELS.destinoTraslado, value: patient.destinoTraslado },
     { label: getTreatmentHeader(patient.tratamiento), value: patient.nombre },
     { label: FIELD_LABELS.edad, value: patient.edad },
@@ -140,15 +145,21 @@ export function buildShiftReportWhatsAppMessage(
       const outcomeLabel = getOutcomeLabel(outcome);
       const treatment = getTreatmentHeader(patient.tratamiento);
       const dateStr = formatIsoDateEs(patient.fechaRegistro);
+      const exitDateStr = formatIsoDateEs(patient.fechaSalida);
+      const dischargeTypeLabel = getHospitalizationDischargeLabel(patient.tipoAltaHospitalizacion);
       const entry = formatTime12h(patient.horaEntrada);
       const exit = formatTime12h(patient.horaSalida);
 
       const headerParts: string[] = [`${index + 1}. [${outcomeLabel}]`];
       if (dateStr) headerParts.push(`Fecha: ${dateStr}`);
       if (entry) headerParts.push(`${FIELD_LABELS.horaEntrada}: ${entry}`);
+      if (exitDateStr) headerParts.push(`${FIELD_LABELS.fechaSalida}: ${exitDateStr}`);
       if (exit) headerParts.push(`${FIELD_LABELS.horaSalida}: ${exit}`);
 
       const detailParts: string[] = [];
+      if (dischargeTypeLabel) {
+        detailParts.push(`${FIELD_LABELS.tipoAltaHospitalizacion}: ${dischargeTypeLabel}`);
+      }
       if (patient.nombre.trim()) {
         detailParts.push(`${treatment}: ${patient.nombre.trim()}`);
       }

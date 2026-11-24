@@ -17,6 +17,7 @@ import { DischargeModal } from './components/DischargeModal';
 import { Header, type ActiveWorkspaceView } from './components/Header';
 import { HistoryAndSecurityPanel } from './components/HistoryAndSecurityPanel';
 import { HospitalizationModal } from './components/HospitalizationModal';
+import { HospitalizedDischargeModal } from './components/HospitalizedDischargeModal';
 import { PatientForm } from './components/PatientForm';
 import { PatientList, type OutcomeFilter } from './components/PatientList';
 import { ReportModal } from './components/ReportModal';
@@ -57,11 +58,13 @@ import {
 } from './services/cloudShiftService';
 import {
   computeShiftCounts,
+  getPatientOutcome,
   hasRegisteredExit,
   type AccessRequestRecord,
   type AuditLogEntry,
   type ExitOutcome,
   type FieldCorrectionProposal,
+  type HospitalizationDischargeType,
   type MessageType,
   type PatientFormValues,
   type PatientRecord,
@@ -128,6 +131,7 @@ export default function App() {
   const [selectedCategory, setSelectedCategory] = useState<OutcomeFilter>('todos');
   const [editingPatientId, setEditingPatientId] = useState<string | null>(null);
   const [dischargePatientId, setDischargePatientId] = useState<string | null>(null);
+  const [hospitalizedDischargePatientId, setHospitalizedDischargePatientId] = useState<string | null>(null);
   const [hospitalizationPatientId, setHospitalizationPatientId] = useState<string | null>(null);
   const [transferPatientId, setTransferPatientId] = useState<string | null>(null);
   const [whatsAppSession, setWhatsAppSession] = useState<WhatsAppSession | null>(null);
@@ -408,6 +412,11 @@ export default function App() {
     [patients, dischargePatientId]
   );
 
+  const hospitalizedDischargePatient = useMemo(
+    () => patients.find((p) => p.id === hospitalizedDischargePatientId) ?? null,
+    [patients, hospitalizedDischargePatientId]
+  );
+
   const hospitalizationPatient = useMemo(
     () => patients.find((p) => p.id === hospitalizationPatientId) ?? null,
     [patients, hospitalizationPatientId]
@@ -543,7 +552,9 @@ export default function App() {
         targetPatient,
         {
           horaSalida: targetPatient.horaSalida,
+          fechaSalida: '',
           estadoEgreso: 'hospitalizado',
+          tipoAltaHospitalizacion: '',
           destinoTraslado: '',
           medico: updates.medico,
           enfermera: updates.enfermera,
@@ -562,6 +573,54 @@ export default function App() {
       if (error instanceof ConcurrencyConflictError) {
         setConflictNotice(error.message);
         setHospitalizationPatientId(null);
+      } else {
+        throw error;
+      }
+    } finally {
+      setIsSavingRecord(false);
+    }
+  };
+
+  const handleSaveHospitalizedDischarge = async (
+    targetPatient: PatientRecord,
+    updates: {
+      tipoAltaHospitalizacion: Exclude<HospitalizationDischargeType, ''>;
+      fechaSalida: string;
+      horaSalida: string;
+      observacionesSalida: string;
+    },
+    openWhatsAppAfter: boolean
+  ) => {
+    if (!firebaseUser) return;
+    setIsSavingRecord(true);
+    setConflictNotice(null);
+
+    try {
+      await registerDischargeInCloud(
+        targetPatient,
+        {
+          horaSalida: updates.horaSalida,
+          fechaSalida: updates.fechaSalida,
+          estadoEgreso: 'atendido',
+          tipoAltaHospitalizacion: updates.tipoAltaHospitalizacion,
+          destinoTraslado: '',
+          medico: targetPatient.medico,
+          enfermera: targetPatient.enfermera,
+          diagnostico: targetPatient.diagnostico,
+          observacionesSalida: updates.observacionesSalida,
+        },
+        firebaseUser
+      );
+      setHospitalizedDischargePatientId(null);
+      showToast('Salida del hospitalizado registrada y conteos actualizados.');
+
+      if (openWhatsAppAfter) {
+        setWhatsAppSession({ patientId: targetPatient.id, type: 'salida' });
+      }
+    } catch (error) {
+      if (error instanceof ConcurrencyConflictError) {
+        setConflictNotice(error.message);
+        setHospitalizedDischargePatientId(null);
       } else {
         throw error;
       }
@@ -693,6 +752,9 @@ export default function App() {
       if (dischargePatientId === target.id) {
         setDischargePatientId(null);
       }
+      if (hospitalizedDischargePatientId === target.id) {
+        setHospitalizedDischargePatientId(null);
+      }
       if (hospitalizationPatientId === target.id) {
         setHospitalizationPatientId(null);
       }
@@ -710,6 +772,7 @@ export default function App() {
     const deletedCount = await deleteAllPatientsInCloud(patients, firebaseUser, verifiedByEmail);
     setEditingPatientId(null);
     setDischargePatientId(null);
+    setHospitalizedDischargePatientId(null);
     setHospitalizationPatientId(null);
     setTransferPatientId(null);
     setWhatsAppSession(null);
@@ -1116,7 +1179,14 @@ export default function App() {
                 setActiveView('entrada');
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
-              onOpenDischarge={(patient) => setDischargePatientId(patient.id)}
+              onOpenDischarge={(patient) => {
+                const outcome = getPatientOutcome(patient);
+                if (outcome === 'hospitalizado' || Boolean(patient.tipoAltaHospitalizacion)) {
+                  setHospitalizedDischargePatientId(patient.id);
+                } else {
+                  setDischargePatientId(patient.id);
+                }
+              }}
               onOpenHospitalization={(patient) => setHospitalizationPatientId(patient.id)}
               onOpenTransfer={(patient) => setTransferPatientId(patient.id)}
               onOpenWhatsApp={(patient, type) =>
@@ -1239,6 +1309,16 @@ export default function App() {
           isSaving={isSavingRecord}
           onClose={() => setDischargePatientId(null)}
           onSaveDischarge={handleSaveDischarge}
+          onRequestSpellCheck={handleRequestSpellCheck}
+        />
+      )}
+
+      {hospitalizedDischargePatient && (
+        <HospitalizedDischargeModal
+          patient={hospitalizedDischargePatient}
+          isSaving={isSavingRecord}
+          onClose={() => setHospitalizedDischargePatientId(null)}
+          onSaveHospitalizedDischarge={handleSaveHospitalizedDischarge}
           onRequestSpellCheck={handleRequestSpellCheck}
         />
       )}

@@ -201,6 +201,7 @@
       // Formularios en memoria
       intakeForm: null,
       dischargeModal: null,
+      hospitalizedDischargeModal: null,
       hospitalizationModal: null,
       transferModal: null,
       whatsappModal: null,
@@ -402,6 +403,16 @@
         case 'hospitalizado': return 'Hospitalización';
         default: return 'Activo · Sin salida';
       }
+    }
+
+    function parseHospitalizationDischargeType(value) {
+      return value === 'alta_medica' || value === 'alta_voluntaria' ? value : '';
+    }
+
+    function hospitalizationDischargeLabel(type) {
+      if (type === 'alta_medica') return 'Alta médica';
+      if (type === 'alta_voluntaria') return 'Alta voluntaria';
+      return '';
     }
 
     function categoryTitle(filter) {
@@ -633,10 +644,14 @@
       add('Hora de entrada', fmt12(p.horaEntrada));
       add('Hora de salida', fmt12(p.horaSalida));
       add('Fecha', formatIsoDateEs(p.fechaRegistro));
+      if (type === 'salida') {
+        add('Fecha de salida', formatIsoDateEs(p.fechaSalida));
+      }
       if (type === 'salida' && outcome !== 'en_atencion') {
         add('Estado de egreso', outcomeLabel(outcome));
       }
       if (type === 'salida') {
+        add('Tipo de alta', hospitalizationDischargeLabel(p.tipoAltaHospitalizacion));
         add('Destino del traslado', p.destinoTraslado);
       }
       add(treatmentLabel(p.tratamiento), p.nombre);
@@ -677,12 +692,16 @@
         sorted.forEach((p, idx) => {
           const outcome = getOutcome(p);
           const dateStr = formatIsoDateEs(p.fechaRegistro);
+          const exitDateStr = formatIsoDateEs(p.fechaSalida);
+          const dischargeTypeLabel = hospitalizationDischargeLabel(p.tipoAltaHospitalizacion);
           const entry = fmt12(p.horaEntrada);
           const exit = fmt12(p.horaSalida);
           const parts = [`${idx + 1}. [${outcomeLabel(outcome)}]`];
           if (dateStr) parts.push(`Fecha: ${dateStr}`);
           if (entry) parts.push(`Hora de entrada: ${entry}`);
+          if (exitDateStr) parts.push(`Fecha de salida: ${exitDateStr}`);
           if (exit) parts.push(`Hora de salida: ${exit}`);
+          if (dischargeTypeLabel) parts.push(`Tipo de alta: ${dischargeTypeLabel}`);
           if ((p.nombre || '').trim()) parts.push(`${treatmentLabel(p.tratamiento)}: ${p.nombre.trim()}`);
           if ((p.edad || '').trim()) parts.push(`Edad: ${p.edad.trim()}`);
           if ((p.procedencia || '').trim()) parts.push(`Procedencia: ${p.procedencia.trim()}`);
@@ -808,6 +827,8 @@
         const o = getOutcome(p);
         const st = stylesMap[o] || stylesMap.en_atencion;
         const dateStr = formatIsoDateEs(p.fechaRegistro);
+        const exitDateStr = formatIsoDateEs(p.fechaSalida);
+        const dischargeTypeLabel = hospitalizationDischargeLabel(p.tipoAltaHospitalizacion);
         const entry = fmt12(p.horaEntrada);
         const exit = fmt12(p.horaSalida);
 
@@ -819,6 +840,8 @@
         if (idParts.length) detailLines.push(idParts.join('  |  '));
 
         const clinParts = [];
+        if (dischargeTypeLabel) clinParts.push(`Tipo de alta: ${dischargeTypeLabel}`);
+        if (exitDateStr) clinParts.push(`Fecha de salida: ${exitDateStr}`);
         if ((p.motivoVisita || '').trim()) clinParts.push(`Motivo de visita: ${p.motivoVisita.trim()}`);
         if ((p.destinoTraslado || '').trim()) clinParts.push(`Destino del traslado: ${p.destinoTraslado.trim()}`);
         if ((p.observaciones || '').trim()) {
@@ -962,10 +985,12 @@
         createdAt,
         updatedAt,
         fechaRegistro,
+        fechaSalida: normalizeIsoDate(d.fechaSalida),
         horaEntrada: typeof d.horaEntrada === 'string' ? d.horaEntrada : '',
         horaSalida,
         estadoEgreso: ['en_atencion', 'atendido', 'no_espero_turno', 'no_atendido', 'trasladado', 'hospitalizado'].includes(d.estadoEgreso)
           ? d.estadoEgreso : (horaSalida ? 'atendido' : 'en_atencion'),
+        tipoAltaHospitalizacion: parseHospitalizationDischargeType(d.tipoAltaHospitalizacion),
         destinoTraslado: typeof d.destinoTraslado === 'string' ? d.destinoTraslado : '',
         tratamiento: ['paciente', 'usuario', 'usuaria'].includes(d.tratamiento) ? d.tratamiento : 'paciente',
         nombre: typeof d.nombre === 'string' ? d.nombre : '',
@@ -1064,9 +1089,11 @@
           updatedByEmail: clamp(u.email || '', 200),
           version: 1,
           fechaRegistro: normalizeIsoDate(form.fechaRegistro) || getTodayIsoDate(),
+          fechaSalida: '',
           horaEntrada: clamp(form.horaEntrada, 10),
           horaSalida,
           estadoEgreso: estado,
+          tipoAltaHospitalizacion: '',
           destinoTraslado: clamp(form.destinoTraslado || '', 200),
           tratamiento: ['paciente', 'usuario', 'usuaria'].includes(form.tratamiento) ? form.tratamiento : 'paciente',
           nombre: clamp(form.nombre, 200),
@@ -1141,6 +1168,12 @@
         updates.destinoTraslado !== undefined ? updates.destinoTraslado : (existing.destinoTraslado || ''),
         200
       );
+      const nextTipoAlta = updates.tipoAltaHospitalizacion !== undefined
+        ? parseHospitalizationDischargeType(updates.tipoAltaHospitalizacion)
+        : (updates.estadoEgreso === 'hospitalizado' ? '' : parseHospitalizationDischargeType(existing.tipoAltaHospitalizacion));
+      const nextFechaSalida = updates.fechaSalida !== undefined
+        ? normalizeIsoDate(updates.fechaSalida)
+        : (updates.estadoEgreso === 'hospitalizado' ? '' : normalizeIsoDate(existing.fechaSalida));
       try {
         await runTransaction(db, async (tx) => {
           const snap = await tx.get(ref);
@@ -1150,8 +1183,10 @@
             throw new Error('CONFLICT:Otro dispositivo actualizó este paciente mientras registrabas los datos. Vuelve a abrir el registro.');
           }
           tx.update(ref, {
+            fechaSalida: nextFechaSalida,
             horaSalida: clamp(updates.horaSalida, 10),
             estadoEgreso: updates.estadoEgreso,
+            tipoAltaHospitalizacion: nextTipoAlta,
             destinoTraslado: nextDestino,
             observacionesSalida: clamp(updates.observacionesSalida, 1500),
             medico: clamp(updates.medico, 200),
@@ -1170,6 +1205,8 @@
           auditSummary = `Registró hospitalización de ${label}`;
         } else if (updates.estadoEgreso === 'trasladado') {
           auditSummary = `Registró traslado de ${label}${nextDestino ? ` a ${nextDestino}` : ''}`;
+        } else if (nextTipoAlta) {
+          auditSummary = `Registró salida de hospitalizado (${hospitalizationDischargeLabel(nextTipoAlta)}) de ${label}${nextFechaSalida ? ` el ${nextFechaSalida}` : ''}`;
         }
         await writeAuditLog('register_discharge', auditSummary, 1, existing.id);
       } catch (err) {
@@ -1275,9 +1312,11 @@
             updatedByEmail: clamp(u.email || '', 200),
             version: 1,
             fechaRegistro: normalizeIsoDate(item.fechaRegistro) || extractIsoDateFromTimestamp(item.createdAt || nowIso) || getTodayIsoDate(),
+            fechaSalida: normalizeIsoDate(item.fechaSalida),
             horaEntrada: clamp(item.horaEntrada || '', 10),
             horaSalida: hs,
             estadoEgreso: st,
+            tipoAltaHospitalizacion: parseHospitalizationDischargeType(item.tipoAltaHospitalizacion),
             destinoTraslado: clamp(item.destinoTraslado || '', 200),
             tratamiento: ['paciente', 'usuario', 'usuaria'].includes(item.tratamiento) ? item.tratamiento : 'paciente',
             nombre: clamp(item.nombre || '', 200),
@@ -1888,6 +1927,19 @@
       render();
     }
 
+    function openHospitalizedDischargeModal(patient) {
+      stopVoice();
+      state.hospitalizedDischargeModal = {
+        patientId: patient.id,
+        tipoAltaHospitalizacion: parseHospitalizationDischargeType(patient.tipoAltaHospitalizacion),
+        fechaSalida: normalizeIsoDate(patient.fechaSalida) || getTodayIsoDate(),
+        horaSalida: patient.horaSalida || nowTime24(),
+        observacionesSalida: patient.observacionesSalida || '',
+        error: ''
+      };
+      render();
+    }
+
     function openHospitalizationModal(patient) {
       stopVoice();
       state.hospitalizationModal = {
@@ -2059,6 +2111,8 @@
           p.nombre, p.edad, p.procedencia, p.motivoVisita, p.destinoTraslado, p.observaciones,
           p.observacionesSalida, p.diagnostico, p.medico, p.enfermera,
           p.fechaRegistro, formatIsoDateEs(p.fechaRegistro),
+          p.fechaSalida, formatIsoDateEs(p.fechaSalida),
+          hospitalizationDischargeLabel(p.tipoAltaHospitalizacion),
           p.horaEntrada, fmt12(p.horaEntrada), p.horaSalida, fmt12(p.horaSalida),
           outcomeLabel(outcome)
         ].join(' ').toLowerCase();
@@ -2136,9 +2190,12 @@
             <div class="divide-y divide-slate-200">
               ${filtered.map((p) => {
                 const outcome = getOutcome(p);
+                const isHospitalized = outcome === 'hospitalizado';
                 const exited = hasExit(p);
                 const orderNum = orderById.get(p.id) || 1;
                 const dateStr = formatIsoDateEs(p.fechaRegistro);
+                const exitDateStr = formatIsoDateEs(p.fechaSalida);
+                const dischargeTypeLabel = hospitalizationDischargeLabel(p.tipoAltaHospitalizacion);
                 const entryStr = fmt12(p.horaEntrada);
                 const exitStr = fmt12(p.horaSalida);
                 const metaItems = [];
@@ -2149,6 +2206,8 @@
                 if ((p.procedencia || '').trim()) metaItems.push(`<span>${esc(p.procedencia.trim())}</span>`);
 
                 const details = [];
+                if (dischargeTypeLabel) details.push(`<div><dt class="inline font-semibold text-slate-900">Tipo de alta:</dt> <dd class="inline font-semibold text-indigo-900">${esc(dischargeTypeLabel)}</dd></div>`);
+                if (exitDateStr) details.push(`<div><dt class="inline font-semibold text-slate-900">Fecha de salida:</dt> <dd class="inline font-mono-num font-semibold text-slate-900">${esc(exitDateStr)}</dd></div>`);
                 if ((p.motivoVisita || '').trim()) details.push(`<div><dt class="inline font-semibold text-slate-900">Motivo de visita:</dt> <dd class="inline">${esc(p.motivoVisita.trim())}</dd></div>`);
                 if ((p.destinoTraslado || '').trim()) details.push(`<div class="sm:col-span-2"><dt class="inline font-semibold text-slate-900">Destino del traslado:</dt> <dd class="inline font-semibold text-blue-900">${esc(p.destinoTraslado.trim())}</dd></div>`);
                 if ((p.observaciones || '').trim()) details.push(`<div><dt class="inline font-semibold text-slate-900">${(p.observacionesSalida || '').trim() ? 'Obs. ingreso:' : 'Observaciones:'}</dt> <dd class="inline">${esc(p.observaciones.trim())}</dd></div>`);
@@ -2183,11 +2242,11 @@
                       <div class="flex flex-wrap items-center gap-2 shrink-0">
                         <button type="button" data-action="open-discharge" data-id="${esc(p.id)}"
                           class="min-h-[40px] rounded-xl px-3.5 py-2 text-xs font-bold transition-colors whitespace-nowrap shrink-0 ${
-                            exited
+                            exited && !isHospitalized
                               ? 'border border-teal-300 bg-teal-50 text-teal-900 hover:bg-teal-100'
                               : 'bg-teal-700 text-white hover:bg-teal-800'
                           }">
-                          ${exited ? 'Editar salida' : 'Registrar salida'}
+                          ${isHospitalized ? 'Registrar salida' : exited ? 'Editar salida' : 'Registrar salida'}
                         </button>
                         <button type="button" data-action="open-whatsapp" data-id="${esc(p.id)}" data-type="ingreso"
                           class="min-h-[40px] rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50 whitespace-nowrap shrink-0">
@@ -2642,6 +2701,87 @@
                   <button type="button" data-action="close-discharge" class="min-h-[42px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700">Cancelar</button>
                   <button type="button" data-action="save-discharge" data-open-wa="1" ${state.isSaving ? 'disabled' : ''} class="min-h-[42px] rounded-xl border border-emerald-700 bg-emerald-50 px-4 py-2 text-xs font-bold text-emerald-900 hover:bg-emerald-100">Guardar y abrir WhatsApp</button>
                   <button type="button" data-action="save-discharge" data-open-wa="0" ${state.isSaving ? 'disabled' : ''} class="min-h-[42px] rounded-xl bg-teal-700 px-5 py-2 text-xs font-bold text-white hover:bg-teal-800">Guardar salida</button>
+                </div>
+              </div>
+            </div>`;
+        }
+      }
+
+      // Modal 1a: Salida del hospitalizado (Alta médica / Alta voluntaria, fecha/hora de salida y observaciones)
+      if (state.hospitalizedDischargeModal) {
+        const hdm = state.hospitalizedDischargeModal;
+        const patient = state.patients.find((p) => p.id === hdm.patientId);
+        if (patient) {
+          const dischargeTypes = [
+            { value: 'alta_medica', label: 'Alta médica', desc: 'Egreso autorizado por el personal médico al concluir su hospitalización.' },
+            { value: 'alta_voluntaria', label: 'Alta voluntaria', desc: 'Egreso solicitado por decisión propia del paciente o su responsable.' }
+          ];
+          html += `
+            <div class="fixed inset-0 z-40 flex items-end sm:items-center justify-center bg-slate-950/60 p-0 sm:p-5 overflow-y-auto">
+              <div role="dialog" aria-modal="true" aria-label="Salida del hospitalizado" class="w-full max-w-2xl rounded-t-2xl sm:rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 max-h-[92vh] overflow-y-auto">
+                <div class="flex items-start justify-between gap-4 border-b border-slate-200 pb-3">
+                  <div>
+                    <div class="text-[11px] font-bold uppercase tracking-wider text-indigo-800">Hospitalización</div>
+                    <h2 class="mt-0.5 text-lg font-bold text-slate-900">Salida del hospitalizado</h2>
+                    <p class="text-xs text-slate-600">${[patient.nombre ? esc(patient.nombre) : '', formatIsoDateEs(patient.fechaRegistro) ? `Ingreso: ${esc(formatIsoDateEs(patient.fechaRegistro))}` : '', fmt12(patient.horaEntrada) ? esc(fmt12(patient.horaEntrada)) : ''].filter(Boolean).join(' · ')}</p>
+                  </div>
+                  <button type="button" data-action="close-hosp-discharge" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Cerrar</button>
+                </div>
+
+                ${hdm.error ? `<div role="alert" class="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800">${esc(hdm.error)}</div>` : ''}
+
+                <div class="mt-4 space-y-4">
+                  <div>
+                    <span class="block text-xs font-bold text-slate-800 mb-1.5">Tipo de alta</span>
+                    <div class="grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Seleccionar tipo de alta">
+                      ${dischargeTypes.map((opt) => `
+                        <button type="button" data-action="set-hosp-discharge-type" data-val="${opt.value}"
+                          class="rounded-xl border p-3.5 text-left transition-colors ${
+                            hdm.tipoAltaHospitalizacion === opt.value
+                              ? 'border-indigo-700 bg-indigo-50/80 text-indigo-950 ring-2 ring-indigo-700/15'
+                              : 'border-slate-300 bg-white text-slate-800 hover:bg-slate-50'
+                          }">
+                          <div class="text-sm font-bold">${opt.label}</div>
+                          <div class="mt-0.5 text-xs text-slate-600">${opt.desc}</div>
+                        </button>
+                      `).join('')}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label for="hd-fecha-salida" class="block text-xs font-bold text-slate-800 mb-1.5">Fecha de salida</label>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <input id="hd-fecha-salida" data-hosp-discharge-field="fechaSalida" type="date" value="${esc(hdm.fechaSalida)}"
+                        class="min-h-[42px] flex-1 min-w-[190px] rounded-xl border border-slate-300 px-3 font-mono-num text-sm text-slate-900 focus:border-indigo-700 focus:outline-none" />
+                      <button type="button" data-action="hosp-discharge-date-today" class="min-h-[42px] rounded-xl border border-slate-300 bg-white px-3.5 text-xs font-semibold text-slate-700 hover:bg-slate-100">Hoy</button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label class="block text-xs font-bold text-slate-800 mb-1.5">Hora de salida (formato 12 h)</label>
+                    ${renderTime12hControl('hosp-discharge-salida', hdm.horaSalida)}
+                  </div>
+
+                  <div>
+                    <div class="flex items-center justify-between gap-2 mb-1.5">
+                      <label for="hd-obs" class="text-xs font-bold text-slate-800">Observaciones</label>
+                      ${renderMicButton('hosp-discharge:observacionesSalida', 'observaciones')}
+                    </div>
+                    <textarea id="hd-obs" data-hosp-discharge-field="observacionesSalida" rows="3" maxlength="1500"
+                      placeholder="Registra novedades u observaciones de la salida (opcional)..."
+                      class="w-full rounded-xl border border-slate-300 p-3 text-sm text-slate-900 focus:border-indigo-700 focus:outline-none">${esc(hdm.observacionesSalida)}</textarea>
+                    <p class="mt-1 text-[11px] text-slate-500">Al guardar, el paciente saldrá del conteo de Hospitalización y se sumará a Atendidos, conservando su tipo de alta, fecha de salida y observaciones.</p>
+                  </div>
+
+                  <div>
+                    <button type="button" data-action="spellcheck-hosp-discharge" class="min-h-[40px] rounded-xl border border-indigo-300 bg-indigo-50 px-3.5 py-2 text-xs font-bold text-indigo-900 hover:bg-indigo-100">Rectificar escritura y ortografía</button>
+                  </div>
+                </div>
+
+                <div class="mt-5 flex flex-col-reverse gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:justify-end">
+                  <button type="button" data-action="close-hosp-discharge" class="min-h-[42px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700">Cancelar</button>
+                  <button type="button" data-action="save-hosp-discharge" data-open-wa="1" ${state.isSaving ? 'disabled' : ''} class="min-h-[42px] rounded-xl border border-emerald-700 bg-emerald-50 px-4 py-2 text-xs font-bold text-emerald-900 hover:bg-emerald-100">Guardar y abrir WhatsApp</button>
+                  <button type="button" data-action="save-hosp-discharge" data-open-wa="0" ${state.isSaving ? 'disabled' : ''} class="min-h-[42px] rounded-xl bg-teal-700 px-5 py-2 text-xs font-bold text-white hover:bg-teal-800">Guardar salida</button>
                 </div>
               </div>
             </div>`;
@@ -3208,6 +3348,15 @@
         return;
       }
 
+      if (target.dataset.hospDischargeField && state.hospitalizedDischargeModal) {
+        state.hospitalizedDischargeModal[target.dataset.hospDischargeField] = target.value;
+        if (target.dataset.hospDischargeField === 'fechaSalida') {
+          state.hospitalizedDischargeModal.fechaSalida = normalizeIsoDate(target.value) || getTodayIsoDate();
+          render();
+        }
+        return;
+      }
+
       if (target.dataset.hospField && state.hospitalizationModal) {
         state.hospitalizationModal[target.dataset.hospField] = target.value;
         if (target.dataset.hospField === 'doctorName' || target.dataset.hospField === 'nurseName') {
@@ -3248,19 +3397,28 @@
         return;
       }
 
+      if (target.dataset.hospDischargeField === 'fechaSalida' && state.hospitalizedDischargeModal) {
+        state.hospitalizedDischargeModal.fechaSalida = normalizeIsoDate(target.value) || getTodayIsoDate();
+        render();
+        return;
+      }
+
       if (target.dataset.timePart) {
         const [prefix, part] = target.dataset.timePart.split(':');
         const current =
           prefix === 'intake-entrada'
             ? state.intakeForm?.horaEntrada
-            : prefix === 'transfer-salida'
-              ? state.transferModal?.horaSalida
-              : state.dischargeModal?.horaSalida;
+            : prefix === 'hosp-discharge-salida'
+              ? state.hospitalizedDischargeModal?.horaSalida
+              : prefix === 'transfer-salida'
+                ? state.transferModal?.horaSalida
+                : state.dischargeModal?.horaSalida;
         const cur = parse24To12(current || nowTime24());
         cur[part] = target.value;
         const next24 = to24From12(cur.h || '12', cur.m || '00', cur.p || 'AM');
         if (prefix === 'intake-entrada' && state.intakeForm) state.intakeForm.horaEntrada = next24;
         if (prefix === 'discharge-salida' && state.dischargeModal) state.dischargeModal.horaSalida = next24;
+        if (prefix === 'hosp-discharge-salida' && state.hospitalizedDischargeModal) state.hospitalizedDischargeModal.horaSalida = next24;
         if (prefix === 'transfer-salida' && state.transferModal) state.transferModal.horaSalida = next24;
         render();
         return;
@@ -3397,6 +3555,7 @@
           const now = nowTime24();
           if (btn.dataset.prefix === 'intake-entrada' && state.intakeForm) state.intakeForm.horaEntrada = now;
           if (btn.dataset.prefix === 'discharge-salida' && state.dischargeModal) state.dischargeModal.horaSalida = now;
+          if (btn.dataset.prefix === 'hosp-discharge-salida' && state.hospitalizedDischargeModal) state.hospitalizedDischargeModal.horaSalida = now;
           if (btn.dataset.prefix === 'transfer-salida' && state.transferModal) state.transferModal.horaSalida = now;
           render();
           break;
@@ -3421,6 +3580,9 @@
             } else if (scope === 'discharge' && state.dischargeModal) {
               const cur = (state.dischargeModal[field] || '').trim();
               state.dischargeModal[field] = cur ? `${cur} ${spoken}` : spoken;
+            } else if (scope === 'hosp-discharge' && state.hospitalizedDischargeModal) {
+              const cur = (state.hospitalizedDischargeModal[field] || '').trim();
+              state.hospitalizedDischargeModal[field] = cur ? `${cur} ${spoken}` : spoken;
             } else if (scope === 'hosp' && state.hospitalizationModal) {
               const cur = (state.hospitalizationModal[field] || '').trim();
               state.hospitalizationModal[field] = cur ? `${cur} ${spoken}` : spoken;
@@ -3524,6 +3686,25 @@
           render();
           break;
         }
+        case 'spellcheck-hosp-discharge': {
+          if (!state.hospitalizedDischargeModal) break;
+          const hdm = state.hospitalizedDischargeModal;
+          const proposals = [
+            reviewTextField('observacionesSalida', 'Observaciones', hdm.observacionesSalida)
+          ];
+          state.spellModal = {
+            proposals,
+            onApply: () => {
+              for (const p of proposals) {
+                if (!p.changed || !state.hospitalizedDischargeModal) continue;
+                state.hospitalizedDischargeModal[p.field] = p.proposed;
+              }
+              showToast('Ortografía de observaciones rectificada.');
+            }
+          };
+          render();
+          break;
+        }
         case 'apply-spell':
           if (state.spellModal) { state.spellModal.onApply(); state.spellModal = null; render(); }
           break;
@@ -3550,7 +3731,69 @@
         }
         case 'open-discharge': {
           const p = state.patients.find((x) => x.id === btn.dataset.id);
-          if (p) openDischargeModal(p);
+          if (p) {
+            if (getOutcome(p) === 'hospitalizado' || Boolean(p.tipoAltaHospitalizacion)) {
+              openHospitalizedDischargeModal(p);
+            } else {
+              openDischargeModal(p);
+            }
+          }
+          break;
+        }
+        case 'close-hosp-discharge':
+          stopVoice(); state.hospitalizedDischargeModal = null; render(); break;
+        case 'set-hosp-discharge-type':
+          if (state.hospitalizedDischargeModal) {
+            state.hospitalizedDischargeModal.tipoAltaHospitalizacion = parseHospitalizationDischargeType(btn.dataset.val);
+            state.hospitalizedDischargeModal.error = '';
+            render();
+          }
+          break;
+        case 'hosp-discharge-date-today':
+          if (state.hospitalizedDischargeModal) {
+            state.hospitalizedDischargeModal.fechaSalida = getTodayIsoDate();
+            render();
+          }
+          break;
+        case 'save-hosp-discharge': {
+          if (!state.hospitalizedDischargeModal) break;
+          const hdm = state.hospitalizedDischargeModal;
+          if (hdm.tipoAltaHospitalizacion !== 'alta_medica' && hdm.tipoAltaHospitalizacion !== 'alta_voluntaria') {
+            hdm.error = 'Selecciona si corresponde a Alta médica o Alta voluntaria.';
+            render();
+            break;
+          }
+          const p = state.patients.find((x) => x.id === hdm.patientId);
+          if (!p) { state.hospitalizedDischargeModal = null; render(); break; }
+          state.isSaving = true; render();
+          try {
+            await registerDischargeCloud(p, {
+              horaSalida: hdm.horaSalida,
+              fechaSalida: normalizeIsoDate(hdm.fechaSalida) || getTodayIsoDate(),
+              estadoEgreso: 'atendido',
+              tipoAltaHospitalizacion: hdm.tipoAltaHospitalizacion,
+              destinoTraslado: '',
+              observacionesSalida: hdm.observacionesSalida,
+              medico: p.medico || '',
+              enfermera: p.enfermera || '',
+              diagnostico: p.diagnostico || ''
+            });
+            const openWa = btn.dataset.openWa === '1';
+            const pid = p.id;
+            state.hospitalizedDischargeModal = null;
+            showToast('Salida del hospitalizado registrada y conteos actualizados.');
+            if (openWa) state.whatsappModal = { patientId: pid, type: 'salida' };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : '';
+            if (msg.startsWith('CONFLICT:')) {
+              state.conflictNotice = msg.slice('CONFLICT:'.length);
+              state.hospitalizedDischargeModal = null;
+            } else {
+              hdm.error = 'No se pudo guardar la salida del hospitalizado. Intenta nuevamente.';
+            }
+          } finally {
+            state.isSaving = false; render();
+          }
           break;
         }
         case 'close-discharge':
@@ -3608,7 +3851,9 @@
           try {
             await registerDischargeCloud(p, {
               horaSalida: p.horaSalida || '',
+              fechaSalida: '',
               estadoEgreso: 'hospitalizado',
+              tipoAltaHospitalizacion: '',
               destinoTraslado: '',
               observacionesSalida: hm.observacionesSalida,
               medico: formatDoctor(hm.doctorTitle, hm.doctorName),
@@ -3733,6 +3978,7 @@
                 await deleteSinglePatientCloud(p, verifier);
                 if (state.editingPatientId === p.id) { state.editingPatientId = null; state.intakeForm = null; }
                 if (state.dischargeModal?.patientId === p.id) state.dischargeModal = null;
+                if (state.hospitalizedDischargeModal?.patientId === p.id) state.hospitalizedDischargeModal = null;
                 if (state.hospitalizationModal?.patientId === p.id) state.hospitalizationModal = null;
                 if (state.transferModal?.patientId === p.id) state.transferModal = null;
                 if (state.whatsappModal?.patientId === p.id) state.whatsappModal = null;
@@ -3745,6 +3991,7 @@
               state.editingPatientId = null;
               state.intakeForm = null;
               state.dischargeModal = null;
+              state.hospitalizedDischargeModal = null;
               state.hospitalizationModal = null;
               state.transferModal = null;
               state.whatsappModal = null;

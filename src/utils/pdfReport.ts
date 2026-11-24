@@ -2,6 +2,7 @@ import { jsPDF } from 'jspdf';
 import {
   DEFAULT_SHIFT_SUPERVISOR,
   FIELD_LABELS,
+  getHospitalizationDischargeLabel,
   getOutcomeLabel,
   getTreatmentHeader,
 } from '../config/labels';
@@ -234,6 +235,8 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
     const treatmentHeader = getTreatmentHeader(patient.tratamiento);
 
     const recordDate = formatIsoDateEs(patient.fechaRegistro);
+    const exitDate = formatIsoDateEs(patient.fechaSalida);
+    const dischargeTypeLabel = getHospitalizationDischargeLabel(patient.tipoAltaHospitalizacion);
     const entryTime = formatTime12h(patient.horaEntrada);
     const exitTime = formatTime12h(patient.horaSalida);
 
@@ -255,6 +258,12 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
     }
 
     const clinicalParts: string[] = [];
+    if (dischargeTypeLabel) {
+      clinicalParts.push(`${FIELD_LABELS.tipoAltaHospitalizacion}: ${dischargeTypeLabel}`);
+    }
+    if (exitDate) {
+      clinicalParts.push(`${FIELD_LABELS.fechaSalida}: ${exitDate}`);
+    }
     if (patient.motivoVisita.trim()) {
       clinicalParts.push(`${FIELD_LABELS.motivoVisita}: ${patient.motivoVisita.trim()}`);
     }

@@ -16,7 +16,12 @@ import {
   X,
   XCircle,
 } from 'lucide-react';
-import { FIELD_LABELS, getOutcomeLabel, getTreatmentHeader } from '../config/labels';
+import {
+  FIELD_LABELS,
+  getHospitalizationDischargeLabel,
+  getOutcomeLabel,
+  getTreatmentHeader,
+} from '../config/labels';
 import {
   computeShiftCounts,
   getPatientOutcome,
@@ -175,6 +180,9 @@ export function PatientList({
           patient.diagnostico,
           patient.fechaRegistro,
           formatIsoDateEs(patient.fechaRegistro),
+          patient.fechaSalida,
+          formatIsoDateEs(patient.fechaSalida),
+          getHospitalizationDischargeLabel(patient.tipoAltaHospitalizacion),
           patient.horaEntrada,
           formatTime12h(patient.horaEntrada),
           patient.horaSalida,
@@ -365,16 +373,23 @@ export function PatientList({
         <ul className="divide-y divide-slate-200">
           {filteredPatients.map((patient) => {
             const outcome = getPatientOutcome(patient);
+            const isHospitalized = outcome === 'hospitalizado';
             const isExited = hasRegisteredExit(patient);
             const isEditing = editingPatientId === patient.id;
             const treatmentLabel = getTreatmentHeader(patient.tratamiento);
             const orderNum = orderNumberById.get(patient.id) ?? 1;
             const formattedDate = formatIsoDateEs(patient.fechaRegistro);
+            const formattedExitDate = formatIsoDateEs(patient.fechaSalida);
+            const dischargeTypeLabel = getHospitalizationDischargeLabel(
+              patient.tipoAltaHospitalizacion
+            );
             const formattedEntry = formatTime12h(patient.horaEntrada);
             const formattedExit = formatTime12h(patient.horaSalida);
 
             const hasDetailFields = Boolean(
-              patient.motivoVisita.trim() ||
+              dischargeTypeLabel ||
+                formattedExitDate ||
+                patient.motivoVisita.trim() ||
                 patient.destinoTraslado.trim() ||
                 patient.observaciones.trim() ||
                 patient.medico.trim() ||
@@ -451,6 +466,28 @@ export function PatientList({
                 {/* Detalles clínicos: solo mostrar el bloque y los campos efectivamente completados */}
                 {hasDetailFields && (
                   <dl className="mt-3.5 grid grid-cols-1 gap-2 rounded-xl border border-slate-100 bg-slate-50/70 p-3.5 text-sm sm:grid-cols-2">
+                    {dischargeTypeLabel && (
+                      <div>
+                        <dt className="text-xs font-semibold text-slate-500">
+                          {FIELD_LABELS.tipoAltaHospitalizacion}
+                        </dt>
+                        <dd className="mt-0.5 font-semibold text-indigo-950 break-words">
+                          {dischargeTypeLabel}
+                        </dd>
+                      </div>
+                    )}
+
+                    {formattedExitDate && (
+                      <div>
+                        <dt className="text-xs font-semibold text-slate-500">
+                          {FIELD_LABELS.fechaSalida}
+                        </dt>
+                        <dd className="mt-0.5 font-mono font-semibold tabular-nums text-slate-900">
+                          {formattedExitDate}
+                        </dd>
+                      </div>
+                    )}
+
                     {patient.motivoVisita.trim() && (
                       <div className="sm:col-span-2">
                         <dt className="text-xs font-semibold text-slate-500">
@@ -536,13 +573,19 @@ export function PatientList({
                     type="button"
                     onClick={() => onOpenDischarge(patient)}
                     className={`inline-flex min-h-[42px] items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3.5 py-2 text-xs font-semibold transition-colors ${
-                      isExited
+                      isExited && !isHospitalized
                         ? 'border border-slate-300 bg-white text-slate-800 hover:bg-slate-100'
                         : 'bg-teal-700 text-white hover:bg-teal-800'
                     }`}
                   >
                     <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>{isExited ? 'Editar salida' : 'Registrar salida'}</span>
+                    <span>
+                      {isHospitalized
+                        ? 'Registrar salida'
+                        : isExited
+                          ? 'Editar salida'
+                          : 'Registrar salida'}
+                    </span>
                   </button>
 
                   <button

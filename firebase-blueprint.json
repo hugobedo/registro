@@ -101,9 +101,18 @@
           "type": "string",
           "maxLength": 10
         },
+        "fechaSalida": {
+          "type": "string",
+          "maxLength": 10,
+          "pattern": "^(\\d{4}-\\d{2}-\\d{2})?$"
+        },
         "estadoEgreso": {
           "type": "string",
           "enum": ["en_atencion", "atendido", "no_espero_turno", "no_atendido", "trasladado", "hospitalizado"]
+        },
+        "tipoAltaHospitalizacion": {
+          "type": "string",
+          "enum": ["", "alta_medica", "alta_voluntaria"]
         },
         "destinoTraslado": {
           "type": "string",

@@ -24,12 +24,14 @@ import {
 import { db } from '../firebase';
 import {
   isExitOutcome,
+  isHospitalizationDischargeType,
   type AccessRequestRecord,
   type AccessRequestStatus,
   type AuditActionType,
   type AuditLogEntry,
   type DeleteAuthStatus,
   type ExitOutcome,
+  type HospitalizationDischargeType,
   type PatientFormValues,
   type PatientOutcome,
   type PatientRecord,
@@ -81,6 +83,11 @@ function parseOutcome(value: unknown, horaSalida: string): PatientOutcome {
   return horaSalida.trim().length > 0 ? 'atendido' : 'en_atencion';
 }
 
+function parseHospitalizationDischargeType(value: unknown): HospitalizationDischargeType {
+  if (isHospitalizationDischargeType(value)) return value;
+  return '';
+}
+
 function mapDocToPatient(id: string, data: Record<string, unknown>): PatientRecord {
   const horaSalida = typeof data.horaSalida === 'string' ? data.horaSalida : '';
   const createdAtIso =
@@ -99,9 +106,11 @@ function mapDocToPatient(id: string, data: Record<string, unknown>): PatientReco
     createdAt: createdAtIso,
     updatedAt: updatedAtIso,
     fechaRegistro,
+    fechaSalida: normalizeIsoDate(data.fechaSalida),
     horaEntrada: typeof data.horaEntrada === 'string' ? data.horaEntrada : '',
     horaSalida,
     estadoEgreso: parseOutcome(data.estadoEgreso, horaSalida),
+    tipoAltaHospitalizacion: parseHospitalizationDischargeType(data.tipoAltaHospitalizacion),
     destinoTraslado: typeof data.destinoTraslado === 'string' ? data.destinoTraslado : '',
     tratamiento: parseTreatment(data.tratamiento),
     nombre: typeof data.nombre === 'string' ? data.nombre : '',
@@ -764,9 +773,11 @@ export async function createPatientInCloud(
     updatedByEmail: clampStr(actor.email || '', 200),
     version: 1,
     fechaRegistro,
+    fechaSalida: '',
     horaEntrada: clampStr(values.horaEntrada, 10),
     horaSalida: clampStr(values.horaSalida, 10),
     estadoEgreso: values.estadoEgreso,
+    tipoAltaHospitalizacion: '' as HospitalizationDischargeType,
     destinoTraslado: clampStr(values.destinoTraslado, 200),
     tratamiento: values.tratamiento,
     nombre: clampStr(values.nombre, 200),
@@ -874,7 +885,9 @@ export async function registerDischargeInCloud(
   existingPatient: PatientRecord,
   updates: {
     horaSalida: string;
+    fechaSalida?: string;
     estadoEgreso: ExitOutcome;
+    tipoAltaHospitalizacion?: HospitalizationDischargeType;
     destinoTraslado?: string;
     observacionesSalida: string;
     medico: string;
@@ -892,6 +905,18 @@ export async function registerDischargeInCloud(
       : existingPatient.destinoTraslado || '',
     200
   );
+  const nextTipoAlta: HospitalizationDischargeType =
+    updates.tipoAltaHospitalizacion !== undefined
+      ? parseHospitalizationDischargeType(updates.tipoAltaHospitalizacion)
+      : updates.estadoEgreso === 'hospitalizado'
+        ? ''
+        : existingPatient.tipoAltaHospitalizacion || '';
+  const nextFechaSalida =
+    updates.fechaSalida !== undefined
+      ? normalizeIsoDate(updates.fechaSalida)
+      : updates.estadoEgreso === 'hospitalizado'
+        ? ''
+        : normalizeIsoDate(existingPatient.fechaSalida);
 
   try {
     await runTransaction(db, async (tx) => {
@@ -910,8 +935,10 @@ export async function registerDischargeInCloud(
       }
 
       tx.update(ref, {
+        fechaSalida: nextFechaSalida,
         horaSalida: clampStr(updates.horaSalida, 10),
         estadoEgreso: updates.estadoEgreso,
+        tipoAltaHospitalizacion: nextTipoAlta,
         destinoTraslado: nextDestino,
         observacionesSalida: clampStr(updates.observacionesSalida, 1500),
         medico: clampStr(updates.medico, 200),
@@ -932,6 +959,9 @@ export async function registerDischargeInCloud(
       auditSummary = `Registró hospitalización de ${patientLabel}${timeSuffix}`;
     } else if (updates.estadoEgreso === 'trasladado') {
       auditSummary = `Registró traslado de ${patientLabel}${nextDestino ? ` a ${nextDestino}` : ''}${timeSuffix}`;
+    } else if (nextTipoAlta) {
+      const altaLabel = nextTipoAlta === 'alta_medica' ? 'Alta médica' : 'Alta voluntaria';
+      auditSummary = `Registró salida de hospitalizado (${altaLabel}) de ${patientLabel}${nextFechaSalida ? ` el ${nextFechaSalida}` : ''}${timeSuffix}`;
     }
 
     await writeAuditLog({
@@ -1042,9 +1072,11 @@ export async function importPatientsBatchToCloud(
           updatedByEmail: clampStr(actor.email || '', 200),
           version: 1,
           fechaRegistro,
+          fechaSalida: normalizeIsoDate(item.fechaSalida),
           horaEntrada: clampStr(item.horaEntrada, 10),
           horaSalida: clampStr(item.horaSalida, 10),
           estadoEgreso: parseOutcome(item.estadoEgreso, item.horaSalida),
+          tipoAltaHospitalizacion: parseHospitalizationDischargeType(item.tipoAltaHospitalizacion),
           destinoTraslado: clampStr(item.destinoTraslado || '', 200),
           tratamiento: parseTreatment(item.tratamiento),
           nombre: clampStr(item.nombre, 200),

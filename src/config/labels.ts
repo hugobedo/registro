@@ -1,4 +1,9 @@
-import type { ExitOutcome, PatientOutcome, TreatmentLabel } from '../types/patient';
+import type {
+  ExitOutcome,
+  HospitalizationDischargeType,
+  PatientOutcome,
+  TreatmentLabel,
+} from '../types/patient';
 
 /**
  * Identificador único del espacio compartido en la nube.
@@ -28,7 +33,9 @@ export const PROCEDENCIA_LABEL = 'Procedencia';
 export const FIELD_LABELS = {
   horaEntrada: 'Hora de entrada',
   horaSalida: 'Hora de salida',
+  fechaSalida: 'Fecha de salida',
   estadoEgreso: 'Estado de egreso',
+  tipoAltaHospitalizacion: 'Tipo de alta',
   destinoTraslado: 'Destino del traslado',
   nombre: 'Nombre',
   edad: 'Edad',
@@ -114,6 +121,36 @@ export function getOutcomeLabel(outcome: PatientOutcome): string {
       return 'Hospitalización';
     default:
       return 'En atención (sin salida)';
+  }
+}
+
+export const HOSPITALIZATION_DISCHARGE_OPTIONS: ReadonlyArray<{
+  value: Exclude<HospitalizationDischargeType, ''>;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: 'alta_medica',
+    label: 'Alta médica',
+    description: 'Egreso autorizado por el personal médico al concluir su hospitalización.',
+  },
+  {
+    value: 'alta_voluntaria',
+    label: 'Alta voluntaria',
+    description: 'Egreso solicitado por decisión propia del paciente o su responsable.',
+  },
+];
+
+export function getHospitalizationDischargeLabel(
+  type: HospitalizationDischargeType | undefined
+): string {
+  switch (type) {
+    case 'alta_medica':
+      return 'Alta médica';
+    case 'alta_voluntaria':
+      return 'Alta voluntaria';
+    default:
+      return '';
   }
 }
 

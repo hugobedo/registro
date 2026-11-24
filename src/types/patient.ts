@@ -9,6 +9,8 @@ export type ExitOutcome =
 
 export type PatientOutcome = 'en_atencion' | ExitOutcome;
 
+export type HospitalizationDischargeType = '' | 'alta_medica' | 'alta_voluntaria';
+
 export type MessageType = 'ingreso' | 'salida';
 
 export type StaffRole = 'admin' | 'staff';
@@ -34,9 +36,11 @@ export interface PatientRecord {
   createdAt: string;
   updatedAt: string;
   fechaRegistro: string;
+  fechaSalida: string;
   horaEntrada: string;
   horaSalida: string;
   estadoEgreso: PatientOutcome;
+  tipoAltaHospitalizacion: HospitalizationDischargeType;
   destinoTraslado: string;
   tratamiento: TreatmentLabel;
   nombre: string;
@@ -179,6 +183,12 @@ export function isExitOutcome(value: unknown): value is ExitOutcome {
     value === 'trasladado' ||
     value === 'hospitalizado'
   );
+}
+
+export function isHospitalizationDischargeType(
+  value: unknown
+): value is HospitalizationDischargeType {
+  return value === '' || value === 'alta_medica' || value === 'alta_voluntaria';
 }
 
 export function getPatientOutcome(
