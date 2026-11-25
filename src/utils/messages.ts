@@ -9,6 +9,7 @@ import {
 import {
   computeShiftCounts,
   getPatientOutcome,
+  hasReadmission,
   type MessageType,
   type PatientRecord,
 } from '../types/patient';
@@ -45,9 +46,21 @@ export function buildIngresoMessage(
   patient: PatientRecord,
   _includeEmptyFields = false
 ): string {
+  const isReadmitted = hasReadmission(patient);
+  const timeLines: MessageFieldLine[] = isReadmitted
+    ? [
+        { label: FIELD_LABELS.primeraEntrada, value: formatTime12h(patient.horaEntrada) },
+        { label: FIELD_LABELS.primeraSalida, value: formatTime12h(patient.horaSalida) },
+        { label: FIELD_LABELS.segundaEntrada, value: formatTime12h(patient.horaSegundaEntrada) },
+        { label: FIELD_LABELS.segundaSalida, value: formatTime12h(patient.horaSegundaSalida) },
+      ]
+    : [
+        { label: FIELD_LABELS.horaEntrada, value: formatTime12h(patient.horaEntrada) },
+        { label: FIELD_LABELS.horaSalida, value: formatTime12h(patient.horaSalida) },
+      ];
+
   const lines: MessageFieldLine[] = [
-    { label: FIELD_LABELS.horaEntrada, value: formatTime12h(patient.horaEntrada) },
-    { label: FIELD_LABELS.horaSalida, value: formatTime12h(patient.horaSalida) },
+    ...timeLines,
     { label: 'Fecha', value: formatIsoDateEs(patient.fechaRegistro) },
     { label: getTreatmentHeader(patient.tratamiento), value: patient.nombre },
     { label: FIELD_LABELS.edad, value: patient.edad },
@@ -72,13 +85,25 @@ export function buildSalidaMessage(
   _includeEmptyFields = false
 ): string {
   const outcome = getPatientOutcome(patient);
+  const isReadmitted = hasReadmission(patient);
   const outcomeValue = outcome === 'en_atencion' ? '' : getOutcomeLabel(outcome);
   const dischargeTypeLabel = getHospitalizationDischargeLabel(patient.tipoAltaHospitalizacion);
   const exitDateFormatted = formatIsoDateEs(patient.fechaSalida);
 
+  const timeLines: MessageFieldLine[] = isReadmitted
+    ? [
+        { label: FIELD_LABELS.primeraEntrada, value: formatTime12h(patient.horaEntrada) },
+        { label: FIELD_LABELS.primeraSalida, value: formatTime12h(patient.horaSalida) },
+        { label: FIELD_LABELS.segundaEntrada, value: formatTime12h(patient.horaSegundaEntrada) },
+        { label: FIELD_LABELS.segundaSalida, value: formatTime12h(patient.horaSegundaSalida) },
+      ]
+    : [
+        { label: FIELD_LABELS.horaEntrada, value: formatTime12h(patient.horaEntrada) },
+        { label: FIELD_LABELS.horaSalida, value: formatTime12h(patient.horaSalida) },
+      ];
+
   const lines: MessageFieldLine[] = [
-    { label: FIELD_LABELS.horaEntrada, value: formatTime12h(patient.horaEntrada) },
-    { label: FIELD_LABELS.horaSalida, value: formatTime12h(patient.horaSalida) },
+    ...timeLines,
     { label: 'Fecha', value: formatIsoDateEs(patient.fechaRegistro) },
     { label: FIELD_LABELS.fechaSalida, value: exitDateFormatted },
     { label: FIELD_LABELS.estadoEgreso, value: outcomeValue },
@@ -136,12 +161,14 @@ export function buildShiftReportWhatsAppMessage(
     `No atendidos: ${counts.noAtendidos}`,
     `Trasladados: ${counts.trasladados}`,
     `Hospitalización: ${counts.hospitalizados}`,
+    `Reingreso: ${counts.reingresos}`,
   ];
 
   if (sortedAll.length > 0) {
     lines.push('', 'PACIENTES REGISTRADOS (DEL PRIMERO AL ÚLTIMO)');
     sortedAll.forEach((patient, index) => {
       const outcome = getPatientOutcome(patient);
+      const isReadmitted = hasReadmission(patient);
       const outcomeLabel = getOutcomeLabel(outcome);
       const treatment = getTreatmentHeader(patient.tratamiento);
       const dateStr = formatIsoDateEs(patient.fechaRegistro);
@@ -149,12 +176,24 @@ export function buildShiftReportWhatsAppMessage(
       const dischargeTypeLabel = getHospitalizationDischargeLabel(patient.tipoAltaHospitalizacion);
       const entry = formatTime12h(patient.horaEntrada);
       const exit = formatTime12h(patient.horaSalida);
+      const secondEntry = formatTime12h(patient.horaSegundaEntrada);
+      const secondExit = formatTime12h(patient.horaSegundaSalida);
 
-      const headerParts: string[] = [`${index + 1}. [${outcomeLabel}]`];
+      const headerParts: string[] = [
+        `${index + 1}. [${outcomeLabel}${isReadmitted ? ' · Reingreso' : ''}]`,
+      ];
       if (dateStr) headerParts.push(`Fecha: ${dateStr}`);
-      if (entry) headerParts.push(`${FIELD_LABELS.horaEntrada}: ${entry}`);
-      if (exitDateStr) headerParts.push(`${FIELD_LABELS.fechaSalida}: ${exitDateStr}`);
-      if (exit) headerParts.push(`${FIELD_LABELS.horaSalida}: ${exit}`);
+      if (isReadmitted) {
+        if (entry) headerParts.push(`${FIELD_LABELS.primeraEntrada}: ${entry}`);
+        if (exit) headerParts.push(`${FIELD_LABELS.primeraSalida}: ${exit}`);
+        if (secondEntry) headerParts.push(`${FIELD_LABELS.segundaEntrada}: ${secondEntry}`);
+        if (secondExit) headerParts.push(`${FIELD_LABELS.segundaSalida}: ${secondExit}`);
+        if (exitDateStr) headerParts.push(`${FIELD_LABELS.fechaSalida}: ${exitDateStr}`);
+      } else {
+        if (entry) headerParts.push(`${FIELD_LABELS.horaEntrada}: ${entry}`);
+        if (exitDateStr) headerParts.push(`${FIELD_LABELS.fechaSalida}: ${exitDateStr}`);
+        if (exit) headerParts.push(`${FIELD_LABELS.horaSalida}: ${exit}`);
+      }
 
       const detailParts: string[] = [];
       if (dischargeTypeLabel) {

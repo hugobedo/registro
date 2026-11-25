@@ -28,9 +28,20 @@ function isValidTreatment(value: unknown): value is TreatmentLabel {
   return value === 'paciente' || value === 'usuario' || value === 'usuaria';
 }
 
-function resolveStoredOutcome(rawOutcome: unknown, horaSalida: string): PatientOutcome {
-  if (rawOutcome === 'en_atencion' || isExitOutcome(rawOutcome)) {
+function resolveStoredOutcome(
+  rawOutcome: unknown,
+  horaSalida: string,
+  horaSegundaEntrada: string,
+  horaSegundaSalida: string
+): PatientOutcome {
+  if (isExitOutcome(rawOutcome)) {
     return rawOutcome;
+  }
+  if (rawOutcome === 'en_atencion') {
+    if (horaSegundaEntrada.trim().length > 0 && horaSegundaSalida.trim().length === 0) {
+      return 'en_atencion';
+    }
+    return 'en_atencion';
   }
   return horaSalida.trim().length > 0 ? 'atendido' : 'en_atencion';
 }
@@ -42,6 +53,16 @@ export function sanitizePatientRecord(raw: unknown): PatientRecord | null {
   if (typeof item.id !== 'string' || !item.id.trim()) return null;
 
   const horaSalida = typeof item.horaSalida === 'string' ? item.horaSalida : '';
+  const horaSegundaEntrada =
+    typeof item.horaSegundaEntrada === 'string' ? item.horaSegundaEntrada : '';
+  const horaSegundaSalida =
+    typeof item.horaSegundaSalida === 'string' ? item.horaSegundaSalida : '';
+  const rawReingresos =
+    typeof item.reingresosCount === 'number' && Number.isFinite(item.reingresosCount)
+      ? Math.max(0, Math.min(100, Math.floor(item.reingresosCount)))
+      : horaSegundaEntrada.trim().length > 0
+        ? 1
+        : 0;
   const createdAt = typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString();
   const fechaRegistro =
     normalizeIsoDate(item.fechaRegistro) || extractIsoDateFromTimestamp(createdAt);
@@ -52,9 +73,18 @@ export function sanitizePatientRecord(raw: unknown): PatientRecord | null {
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : createdAt,
     fechaRegistro,
     fechaSalida: normalizeIsoDate(item.fechaSalida),
+    fechaSegundaEntrada: normalizeIsoDate(item.fechaSegundaEntrada),
     horaEntrada: typeof item.horaEntrada === 'string' ? item.horaEntrada : '',
     horaSalida,
-    estadoEgreso: resolveStoredOutcome(item.estadoEgreso, horaSalida),
+    horaSegundaEntrada,
+    horaSegundaSalida,
+    reingresosCount: rawReingresos,
+    estadoEgreso: resolveStoredOutcome(
+      item.estadoEgreso,
+      horaSalida,
+      horaSegundaEntrada,
+      horaSegundaSalida
+    ),
     tipoAltaHospitalizacion: isHospitalizationDischargeType(item.tipoAltaHospitalizacion)
       ? item.tipoAltaHospitalizacion
       : '',

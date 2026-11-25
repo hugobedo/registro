@@ -6,10 +6,11 @@ import {
   getTreatmentHeader,
 } from '../config/labels';
 import { appendDictatedText, useVoiceDictation } from '../hooks/useVoiceDictation';
-import type {
-  HospitalizationDischargeType,
-  PatientRecord,
-  ReviewableFieldKey,
+import {
+  hasReadmission,
+  type HospitalizationDischargeType,
+  type PatientRecord,
+  type ReviewableFieldKey,
 } from '../types/patient';
 import {
   formatIsoDateEs,
@@ -32,6 +33,7 @@ interface HospitalizedDischargeModalProps {
       tipoAltaHospitalizacion: Exclude<HospitalizationDischargeType, ''>;
       fechaSalida: string;
       horaSalida: string;
+      horaSegundaSalida?: string;
       observacionesSalida: string;
     },
     openWhatsAppAfter: boolean
@@ -49,15 +51,17 @@ export function HospitalizedDischargeModal({
   onSaveHospitalizedDischarge,
   onRequestSpellCheck,
 }: HospitalizedDischargeModalProps) {
+  const isReadmitted = hasReadmission(patient);
   const [tipoAlta, setTipoAlta] = useState<HospitalizationDischargeType>(
     patient.tipoAltaHospitalizacion || ''
   );
   const [fechaSalida, setFechaSalida] = useState<string>(
     normalizeIsoDate(patient.fechaSalida) || getTodayIsoDate()
   );
-  const [horaSalida, setHoraSalida] = useState<string>(
-    patient.horaSalida.trim() ? normalizeTime24h(patient.horaSalida) : getCurrentTime24h()
-  );
+  const [horaSalida, setHoraSalida] = useState<string>(() => {
+    const sourceTime = isReadmitted ? patient.horaSegundaSalida : patient.horaSalida;
+    return sourceTime.trim() ? normalizeTime24h(sourceTime) : getCurrentTime24h();
+  });
   const [observacionesSalida, setObservacionesSalida] = useState<string>(
     patient.observacionesSalida || ''
   );
@@ -74,13 +78,15 @@ export function HospitalizedDischargeModal({
     }
 
     const normalizedDate = normalizeIsoDate(fechaSalida) || getTodayIsoDate();
+    const normalizedExit = normalizeTime24h(horaSalida);
 
     await onSaveHospitalizedDischarge(
       patient,
       {
         tipoAltaHospitalizacion: tipoAlta,
         fechaSalida: normalizedDate,
-        horaSalida: normalizeTime24h(horaSalida),
+        horaSalida: isReadmitted ? patient.horaSalida : normalizedExit,
+        ...(isReadmitted ? { horaSegundaSalida: normalizedExit } : {}),
         observacionesSalida,
       },
       openWhatsAppAfter
@@ -278,7 +284,7 @@ export function HospitalizedDischargeModal({
               htmlFor="hosp-discharge-horaSalida"
               className="block text-sm font-semibold text-slate-800"
             >
-              {FIELD_LABELS.horaSalida} (12 h)
+              {isReadmitted ? FIELD_LABELS.segundaSalida : FIELD_LABELS.horaSalida} (12 h)
             </label>
             <TimeInput12h
               id="hosp-discharge-horaSalida"

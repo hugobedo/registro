@@ -9,6 +9,7 @@ import {
 import {
   computeShiftCounts,
   getPatientOutcome,
+  hasReadmission,
   type PatientOutcome,
   type PatientRecord,
 } from '../types/patient';
@@ -192,6 +193,7 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
     { label: 'No esperó:', value: counts.noEsperoTurno, rgb: [154, 52, 18], row: 1, col: 0 },
     { label: 'No atendidos:', value: counts.noAtendidos, rgb: [185, 28, 28], row: 1, col: 1 },
     { label: 'Trasladados:', value: counts.trasladados, rgb: [29, 78, 216], row: 1, col: 2 },
+    { label: 'Reingreso:', value: counts.reingresos, rgb: [109, 40, 217], row: 1, col: 3 },
   ];
 
   doc.setFontSize(8);
@@ -231,6 +233,7 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
 
   const renderCompactPatientRow = (orderNumber: number, patient: PatientRecord) => {
     const outcome = getPatientOutcome(patient);
+    const isReadmitted = hasReadmission(patient);
     const style = getOutcomePdfStyle(outcome);
     const treatmentHeader = getTreatmentHeader(patient.tratamiento);
 
@@ -239,9 +242,26 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
     const dischargeTypeLabel = getHospitalizationDischargeLabel(patient.tipoAltaHospitalizacion);
     const entryTime = formatTime12h(patient.horaEntrada);
     const exitTime = formatTime12h(patient.horaSalida);
+    const secondEntryTime = formatTime12h(patient.horaSegundaEntrada);
+    const secondExitTime = formatTime12h(patient.horaSegundaSalida);
 
     // Solo incluir campos efectivamente completados por el usuario
     const detailLines: string[] = [];
+
+    if (isReadmitted) {
+      const readmissionParts: string[] = [];
+      if (entryTime) readmissionParts.push(`${FIELD_LABELS.primeraEntrada}: ${entryTime}`);
+      if (exitTime) readmissionParts.push(`${FIELD_LABELS.primeraSalida}: ${exitTime}`);
+      if (secondEntryTime) {
+        readmissionParts.push(`${FIELD_LABELS.segundaEntrada}: ${secondEntryTime}`);
+      }
+      if (secondExitTime) {
+        readmissionParts.push(`${FIELD_LABELS.segundaSalida}: ${secondExitTime}`);
+      }
+      if (readmissionParts.length > 0) {
+        detailLines.push(readmissionParts.join('  |  '));
+      }
+    }
 
     const identityParts: string[] = [];
     if (patient.nombre.trim()) {
@@ -337,8 +357,12 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
 
     const scheduleParts: string[] = [`#${orderNumber}`];
     if (recordDate) scheduleParts.push(recordDate);
-    if (entryTime) scheduleParts.push(`Entrada ${entryTime}`);
-    if (exitTime) scheduleParts.push(`Salida ${exitTime}`);
+    if (isReadmitted) {
+      scheduleParts.push('REINGRESO');
+    } else {
+      if (entryTime) scheduleParts.push(`Entrada ${entryTime}`);
+      if (exitTime) scheduleParts.push(`Salida ${exitTime}`);
+    }
     doc.text(scheduleParts.join('  ·  '), PAGE_MARGIN_X + 3, headerTextY);
 
     doc.setTextColor(...style.textRgb);
@@ -384,7 +408,7 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
     doc.setFontSize(7.5);
     doc.setTextColor(100, 116, 139);
     doc.text(
-      `ACE-MED · ${getOutcomeLabel('atendido')}: ${counts.atendidos} | Hosp.: ${counts.hospitalizados} | No esperó: ${counts.noEsperoTurno} | No atend.: ${counts.noAtendidos} | Trasl.: ${counts.trasladados} | Activos: ${counts.enAtencion}`,
+      `ACE-MED · ${getOutcomeLabel('atendido')}: ${counts.atendidos} | Hosp.: ${counts.hospitalizados} | Reing.: ${counts.reingresos} | No esperó: ${counts.noEsperoTurno} | No atend.: ${counts.noAtendidos} | Trasl.: ${counts.trasladados} | Activos: ${counts.enAtencion}`,
       PAGE_MARGIN_X,
       pageHeight - 6
     );

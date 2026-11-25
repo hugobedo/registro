@@ -101,6 +101,22 @@
           "type": "string",
           "maxLength": 10
         },
+        "horaSegundaEntrada": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "horaSegundaSalida": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "fechaSegundaEntrada": {
+          "type": "string",
+          "maxLength": 10,
+          "pattern": "^(\\d{4}-\\d{2}-\\d{2})?$"
+        },
+        "reingresosCount": {
+          "type": "integer"
+        },
         "fechaSalida": {
           "type": "string",
           "maxLength": 10,
@@ -250,6 +266,7 @@
             "create_patient",
             "update_patient",
             "register_discharge",
+            "register_readmission",
             "delete_patient",
             "delete_all_patients",
             "restore_backup",

@@ -19,6 +19,7 @@ export type AuditActionType =
   | 'create_patient'
   | 'update_patient'
   | 'register_discharge'
+  | 'register_readmission'
   | 'delete_patient'
   | 'delete_all_patients'
   | 'restore_backup'
@@ -37,8 +38,12 @@ export interface PatientRecord {
   updatedAt: string;
   fechaRegistro: string;
   fechaSalida: string;
+  fechaSegundaEntrada: string;
   horaEntrada: string;
   horaSalida: string;
+  horaSegundaEntrada: string;
+  horaSegundaSalida: string;
+  reingresosCount: number;
   estadoEgreso: PatientOutcome;
   tipoAltaHospitalizacion: HospitalizationDischargeType;
   destinoTraslado: string;
@@ -63,6 +68,8 @@ export interface PatientFormValues {
   fechaRegistro: string;
   horaEntrada: string;
   horaSalida: string;
+  horaSegundaEntrada?: string;
+  horaSegundaSalida?: string;
   estadoEgreso: PatientOutcome;
   destinoTraslado: string;
   tratamiento: TreatmentLabel;
@@ -172,6 +179,7 @@ export interface ShiftCounts {
   noAtendidos: number;
   trasladados: number;
   hospitalizados: number;
+  reingresos: number;
   salidasTotales: number;
 }
 
@@ -191,11 +199,43 @@ export function isHospitalizationDischargeType(
   return value === '' || value === 'alta_medica' || value === 'alta_voluntaria';
 }
 
+export function hasReadmission(
+  patient: Pick<PatientRecord, 'horaSegundaEntrada' | 'reingresosCount'>
+): boolean {
+  return (
+    (typeof patient.horaSegundaEntrada === 'string' &&
+      patient.horaSegundaEntrada.trim().length > 0) ||
+    (typeof patient.reingresosCount === 'number' && patient.reingresosCount > 0)
+  );
+}
+
+export function hasActiveReadmission(
+  patient: Pick<PatientRecord, 'horaSegundaEntrada' | 'horaSegundaSalida' | 'estadoEgreso'>
+): boolean {
+  return (
+    patient.estadoEgreso === 'en_atencion' &&
+    typeof patient.horaSegundaEntrada === 'string' &&
+    patient.horaSegundaEntrada.trim().length > 0 &&
+    (!patient.horaSegundaSalida || patient.horaSegundaSalida.trim().length === 0)
+  );
+}
+
 export function getPatientOutcome(
-  patient: Pick<PatientRecord, 'horaSalida' | 'estadoEgreso'>
+  patient: Pick<PatientRecord, 'horaSalida' | 'estadoEgreso'> & {
+    horaSegundaEntrada?: string;
+    horaSegundaSalida?: string;
+  }
 ): PatientOutcome {
   if (isExitOutcome(patient.estadoEgreso)) {
     return patient.estadoEgreso;
+  }
+  if (
+    patient.estadoEgreso === 'en_atencion' &&
+    typeof patient.horaSegundaEntrada === 'string' &&
+    patient.horaSegundaEntrada.trim().length > 0 &&
+    (!patient.horaSegundaSalida || patient.horaSegundaSalida.trim().length === 0)
+  ) {
+    return 'en_atencion';
   }
   if (patient.horaSalida.trim().length > 0) {
     return 'atendido';
@@ -204,7 +244,10 @@ export function getPatientOutcome(
 }
 
 export function hasRegisteredExit(
-  patient: Pick<PatientRecord, 'horaSalida' | 'estadoEgreso'>
+  patient: Pick<PatientRecord, 'horaSalida' | 'estadoEgreso'> & {
+    horaSegundaEntrada?: string;
+    horaSegundaSalida?: string;
+  }
 ): boolean {
   return getPatientOutcome(patient) !== 'en_atencion';
 }
@@ -218,10 +261,15 @@ export function computeShiftCounts(patients: PatientRecord[]): ShiftCounts {
     noAtendidos: 0,
     trasladados: 0,
     hospitalizados: 0,
+    reingresos: 0,
     salidasTotales: 0,
   };
 
   for (const patient of patients) {
+    if (hasReadmission(patient)) {
+      counts.reingresos += 1;
+    }
+
     const outcome = getPatientOutcome(patient);
     switch (outcome) {
       case 'atendido':

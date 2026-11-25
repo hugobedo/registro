@@ -99,7 +99,7 @@ export function ReportModal({
             <div className="text-xs font-semibold text-slate-600">Fecha del informe</div>
             <div className="mt-0.5 font-semibold text-slate-900">{formattedDate}</div>
 
-            <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 border-t border-slate-200 pt-3 text-xs font-semibold tabular-nums sm:grid-cols-3">
+            <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 border-t border-slate-200 pt-3 text-xs font-semibold tabular-nums sm:grid-cols-4">
               <div className="text-slate-900">Total: {counts.total}</div>
               <div className="text-amber-800">Activos: {counts.enAtencion}</div>
               <div className="text-emerald-800">Atendidos: {counts.atendidos}</div>
@@ -107,6 +107,7 @@ export function ReportModal({
               <div className="text-red-800">No atendidos: {counts.noAtendidos}</div>
               <div className="text-blue-800">Trasladados: {counts.trasladados}</div>
               <div className="text-indigo-800">Hospitalización: {counts.hospitalizados}</div>
+              <div className="text-violet-800">Reingreso: {counts.reingresos}</div>
             </div>
           </div>
 

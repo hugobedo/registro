@@ -7,6 +7,7 @@ import {
 } from '../config/labels';
 import { appendDictatedText, useVoiceDictation } from '../hooks/useVoiceDictation';
 import {
+  hasReadmission,
   hasRegisteredExit,
   isExitOutcome,
   type ExitOutcome,
@@ -31,6 +32,7 @@ interface DischargeModalProps {
     patient: PatientRecord,
     updates: {
       horaSalida: string;
+      horaSegundaSalida?: string;
       estadoEgreso: ExitOutcome;
       destinoTraslado?: string;
       observacionesSalida: string;
@@ -54,13 +56,15 @@ export function DischargeModal({
   onRequestSpellCheck,
 }: DischargeModalProps) {
   const alreadyExited = hasRegisteredExit(patient);
+  const isReadmitted = hasReadmission(patient);
 
   const [estadoEgreso, setEstadoEgreso] = useState<ExitOutcome>(
     isExitOutcome(patient.estadoEgreso) ? patient.estadoEgreso : 'atendido'
   );
-  const [horaSalida, setHoraSalida] = useState(
-    patient.horaSalida.trim() ? normalizeTime24h(patient.horaSalida) : getCurrentTime24h()
-  );
+  const [horaSalida, setHoraSalida] = useState(() => {
+    const sourceTime = isReadmitted ? patient.horaSegundaSalida : patient.horaSalida;
+    return sourceTime.trim() ? normalizeTime24h(sourceTime) : getCurrentTime24h();
+  });
 
   // Requisito #8: Al registrar salida, el campo de observaciones inicia COMPLETAMENTE VACÍO.
   // Nunca copia observaciones de ingreso ni coloca textos predeterminados.
@@ -88,10 +92,13 @@ export function DischargeModal({
     const finalMedico = formatDoctorName(medico, doctorTitle);
     const finalEnfermera = formatNurseName(enfermera);
 
+    const normalizedExit = normalizeTime24h(horaSalida);
+
     await onSaveDischarge(
       patient,
       {
-        horaSalida: normalizeTime24h(horaSalida),
+        horaSalida: isReadmitted ? patient.horaSalida : normalizedExit,
+        ...(isReadmitted ? { horaSegundaSalida: normalizedExit } : {}),
         estadoEgreso,
         destinoTraslado: estadoEgreso === 'trasladado' ? destinoTraslado.trim() : '',
         observacionesSalida,
@@ -141,17 +148,41 @@ export function DischargeModal({
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 sm:px-6">
           <div>
             <h2 id="discharge-title" className="text-lg font-bold text-slate-900">
-              {alreadyExited ? 'Editar formato de salida' : 'Registrar salida del paciente'}
+              {isReadmitted
+                ? alreadyExited
+                  ? 'Editar segunda salida del paciente'
+                  : 'Registrar segunda salida del paciente'
+                : alreadyExited
+                  ? 'Editar formato de salida'
+                  : 'Registrar salida del paciente'}
             </h2>
             <p className="mt-1 text-sm text-slate-600">
               {treatmentLabel}:{' '}
               <span className="font-semibold text-slate-900">
                 {patient.nombre.trim() || 'Sin nombre capturado'}
               </span>{' '}
-              · Entrada{' '}
+              · {isReadmitted ? '1ª Entrada' : 'Entrada'}{' '}
               <span className="font-mono tabular-nums">
                 {formatTime12h(patient.horaEntrada)}
               </span>
+              {isReadmitted && formatTime12h(patient.horaSalida) && (
+                <>
+                  {' '}
+                  · 1ª Salida{' '}
+                  <span className="font-mono tabular-nums">
+                    {formatTime12h(patient.horaSalida)}
+                  </span>
+                </>
+              )}
+              {isReadmitted && formatTime12h(patient.horaSegundaEntrada) && (
+                <>
+                  {' '}
+                  · 2ª Entrada{' '}
+                  <span className="font-mono tabular-nums text-violet-900">
+                    {formatTime12h(patient.horaSegundaEntrada)}
+                  </span>
+                </>
+              )}
             </p>
           </div>
           <button
@@ -284,7 +315,7 @@ export function DischargeModal({
               htmlFor="modal-horaSalida"
               className="block text-sm font-semibold text-slate-800"
             >
-              {FIELD_LABELS.horaSalida} (12 h)
+              {isReadmitted ? FIELD_LABELS.segundaSalida : FIELD_LABELS.horaSalida} (12 h)
             </label>
             <TimeInput12h
               id="modal-horaSalida"

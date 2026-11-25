@@ -10,6 +10,7 @@ import {
 import { appendDictatedText, useVoiceDictation } from '../hooks/useVoiceDictation';
 import {
   getPatientOutcome,
+  hasReadmission,
   type PatientFormValues,
   type PatientOutcome,
   type PatientRecord,
@@ -71,6 +72,8 @@ function mapPatientToFormValues(patient: PatientRecord): PatientFormValues {
       getTodayIsoDate(),
     horaEntrada: normalizeTime24h(patient.horaEntrada),
     horaSalida: normalizeTime24h(patient.horaSalida),
+    horaSegundaEntrada: normalizeTime24h(patient.horaSegundaEntrada || ''),
+    horaSegundaSalida: normalizeTime24h(patient.horaSegundaSalida || ''),
     estadoEgreso: getPatientOutcome(patient),
     destinoTraslado: patient.destinoTraslado || '',
     tratamiento: patient.tratamiento,
@@ -183,17 +186,33 @@ export function PatientForm({
     if (validationError) setValidationError(null);
   };
 
+  const editingHasReadmission = Boolean(editingPatient && hasReadmission(editingPatient));
+
   const handleOutcomeChange = (outcome: PatientOutcome) => {
-    setValues((prev) => ({
-      ...prev,
-      estadoEgreso: outcome,
-      horaSalida:
-        outcome === 'en_atencion'
-          ? ''
-          : prev.horaSalida.trim()
-            ? prev.horaSalida
-            : getCurrentTime24h(),
-    }));
+    setValues((prev) => {
+      if (editingHasReadmission) {
+        return {
+          ...prev,
+          estadoEgreso: outcome,
+          horaSegundaSalida:
+            outcome === 'en_atencion'
+              ? ''
+              : (prev.horaSegundaSalida || '').trim()
+                ? prev.horaSegundaSalida
+                : getCurrentTime24h(),
+        };
+      }
+      return {
+        ...prev,
+        estadoEgreso: outcome,
+        horaSalida:
+          outcome === 'en_atencion'
+            ? ''
+            : prev.horaSalida.trim()
+              ? prev.horaSalida
+              : getCurrentTime24h(),
+      };
+    });
   };
 
   const handleSpellCheck = () => {
@@ -226,11 +245,26 @@ export function PatientForm({
   const handleSubmit = async (openWhatsAppAfterSave: boolean) => {
     voice.stopDictation();
 
-    const normalizedHoraSalida =
-      values.estadoEgreso === 'en_atencion' ? '' : normalizeTime24h(values.horaSalida);
+    const normalizedHoraSalida = editingHasReadmission
+      ? normalizeTime24h(values.horaSalida)
+      : values.estadoEgreso === 'en_atencion'
+        ? ''
+        : normalizeTime24h(values.horaSalida);
 
-    const resolvedOutcome: PatientOutcome =
-      normalizedHoraSalida && values.estadoEgreso === 'en_atencion'
+    const normalizedHoraSegundaEntrada = editingHasReadmission
+      ? normalizeTime24h(values.horaSegundaEntrada || '')
+      : undefined;
+    const normalizedHoraSegundaSalida = editingHasReadmission
+      ? values.estadoEgreso === 'en_atencion'
+        ? ''
+        : normalizeTime24h(values.horaSegundaSalida || '')
+      : undefined;
+
+    const resolvedOutcome: PatientOutcome = editingHasReadmission
+      ? normalizedHoraSegundaSalida && values.estadoEgreso === 'en_atencion'
+        ? 'atendido'
+        : values.estadoEgreso
+      : normalizedHoraSalida && values.estadoEgreso === 'en_atencion'
         ? 'atendido'
         : values.estadoEgreso;
 
@@ -247,6 +281,12 @@ export function PatientForm({
         fechaRegistro: normalizeIsoDate(values.fechaRegistro) || getTodayIsoDate(),
         horaEntrada: normalizeTime24h(values.horaEntrada),
         horaSalida: normalizedHoraSalida,
+        ...(editingHasReadmission
+          ? {
+              horaSegundaEntrada: normalizedHoraSegundaEntrada,
+              horaSegundaSalida: normalizedHoraSegundaSalida,
+            }
+          : {}),
         estadoEgreso: resolvedOutcome,
         medico: formattedMedico,
         enfermera: formattedEnfermera,
@@ -722,7 +762,7 @@ export function PatientForm({
                 htmlFor="horaSalida"
                 className="block text-sm font-semibold text-slate-800"
               >
-                {FIELD_LABELS.horaSalida} (12 h)
+                {editingHasReadmission ? FIELD_LABELS.primeraSalida : FIELD_LABELS.horaSalida} (12 h)
               </label>
               <TimeInput12h
                 id="horaSalida"
@@ -733,7 +773,9 @@ export function PatientForm({
                     ...prev,
                     horaSalida: nextTime,
                     estadoEgreso:
-                      nextTime.trim() && prev.estadoEgreso === 'en_atencion'
+                      !editingHasReadmission &&
+                      nextTime.trim() &&
+                      prev.estadoEgreso === 'en_atencion'
                         ? 'atendido'
                         : prev.estadoEgreso,
                   }));
@@ -743,11 +785,63 @@ export function PatientForm({
                     ...prev,
                     horaSalida: getCurrentTime24h(),
                     estadoEgreso:
-                      prev.estadoEgreso === 'en_atencion' ? 'atendido' : prev.estadoEgreso,
+                      !editingHasReadmission && prev.estadoEgreso === 'en_atencion'
+                        ? 'atendido'
+                        : prev.estadoEgreso,
                   }));
                 }}
               />
             </div>
+
+            {editingHasReadmission && (
+              <div className="grid grid-cols-1 gap-4 rounded-xl border border-violet-200 bg-violet-50/40 p-3.5 sm:grid-cols-2">
+                <div>
+                  <label
+                    htmlFor="horaSegundaEntrada"
+                    className="block text-sm font-semibold text-violet-950"
+                  >
+                    {FIELD_LABELS.segundaEntrada} (12 h)
+                  </label>
+                  <TimeInput12h
+                    id="horaSegundaEntrada"
+                    value={values.horaSegundaEntrada || ''}
+                    allowEmpty
+                    onChange={(nextTime) => updateField('horaSegundaEntrada', nextTime)}
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="horaSegundaSalida"
+                    className="block text-sm font-semibold text-violet-950"
+                  >
+                    {FIELD_LABELS.segundaSalida} (12 h)
+                  </label>
+                  <TimeInput12h
+                    id="horaSegundaSalida"
+                    value={values.horaSegundaSalida || ''}
+                    allowEmpty
+                    onChange={(nextTime) => {
+                      setValues((prev) => ({
+                        ...prev,
+                        horaSegundaSalida: nextTime,
+                        estadoEgreso:
+                          nextTime.trim() && prev.estadoEgreso === 'en_atencion'
+                            ? 'atendido'
+                            : prev.estadoEgreso,
+                      }));
+                    }}
+                    onNowClick={() => {
+                      setValues((prev) => ({
+                        ...prev,
+                        horaSegundaSalida: getCurrentTime24h(),
+                        estadoEgreso:
+                          prev.estadoEgreso === 'en_atencion' ? 'atendido' : prev.estadoEgreso,
+                      }));
+                    }}
+                  />
+                </div>
+              </div>
+            )}
 
             {/* Médico con selector DR. / DRA. + voz */}
             <div>

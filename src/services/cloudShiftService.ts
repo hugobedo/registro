@@ -90,6 +90,16 @@ function parseHospitalizationDischargeType(value: unknown): HospitalizationDisch
 
 function mapDocToPatient(id: string, data: Record<string, unknown>): PatientRecord {
   const horaSalida = typeof data.horaSalida === 'string' ? data.horaSalida : '';
+  const horaSegundaEntrada =
+    typeof data.horaSegundaEntrada === 'string' ? data.horaSegundaEntrada : '';
+  const horaSegundaSalida =
+    typeof data.horaSegundaSalida === 'string' ? data.horaSegundaSalida : '';
+  const reingresosCount =
+    typeof data.reingresosCount === 'number' && Number.isFinite(data.reingresosCount)
+      ? Math.max(0, Math.min(100, Math.floor(data.reingresosCount)))
+      : horaSegundaEntrada.trim().length > 0
+        ? 1
+        : 0;
   const createdAtIso =
     typeof data.createdAtIso === 'string' && data.createdAtIso
       ? data.createdAtIso
@@ -107,8 +117,12 @@ function mapDocToPatient(id: string, data: Record<string, unknown>): PatientReco
     updatedAt: updatedAtIso,
     fechaRegistro,
     fechaSalida: normalizeIsoDate(data.fechaSalida),
+    fechaSegundaEntrada: normalizeIsoDate(data.fechaSegundaEntrada),
     horaEntrada: typeof data.horaEntrada === 'string' ? data.horaEntrada : '',
     horaSalida,
+    horaSegundaEntrada,
+    horaSegundaSalida,
+    reingresosCount,
     estadoEgreso: parseOutcome(data.estadoEgreso, horaSalida),
     tipoAltaHospitalizacion: parseHospitalizationDischargeType(data.tipoAltaHospitalizacion),
     destinoTraslado: typeof data.destinoTraslado === 'string' ? data.destinoTraslado : '',
@@ -774,8 +788,12 @@ export async function createPatientInCloud(
     version: 1,
     fechaRegistro,
     fechaSalida: '',
+    fechaSegundaEntrada: '',
     horaEntrada: clampStr(values.horaEntrada, 10),
     horaSalida: clampStr(values.horaSalida, 10),
+    horaSegundaEntrada: '',
+    horaSegundaSalida: '',
+    reingresosCount: 0,
     estadoEgreso: values.estadoEgreso,
     tipoAltaHospitalizacion: '' as HospitalizationDischargeType,
     destinoTraslado: clampStr(values.destinoTraslado, 200),
@@ -842,7 +860,7 @@ export async function updatePatientInCloud(
         extractIsoDateFromTimestamp(existingPatient.createdAt) ||
         getTodayIsoDate();
 
-      tx.update(ref, {
+      const updatePayload: Record<string, unknown> = {
         fechaRegistro: normalizedDate,
         horaEntrada: clampStr(values.horaEntrada, 10),
         horaSalida: clampStr(values.horaSalida, 10),
@@ -863,7 +881,14 @@ export async function updatePatientInCloud(
         updatedByUid: actor.uid,
         updatedByEmail: clampStr(actor.email || '', 200),
         version: currentVersion + 1,
-      });
+      };
+      if (values.horaSegundaEntrada !== undefined) {
+        updatePayload.horaSegundaEntrada = clampStr(values.horaSegundaEntrada, 10);
+      }
+      if (values.horaSegundaSalida !== undefined) {
+        updatePayload.horaSegundaSalida = clampStr(values.horaSegundaSalida, 10);
+      }
+      tx.update(ref, updatePayload);
     });
 
     await writeAuditLog({
@@ -885,6 +910,7 @@ export async function registerDischargeInCloud(
   existingPatient: PatientRecord,
   updates: {
     horaSalida: string;
+    horaSegundaSalida?: string;
     fechaSalida?: string;
     estadoEgreso: ExitOutcome;
     tipoAltaHospitalizacion?: HospitalizationDischargeType;
@@ -917,6 +943,13 @@ export async function registerDischargeInCloud(
       : updates.estadoEgreso === 'hospitalizado'
         ? ''
         : normalizeIsoDate(existingPatient.fechaSalida);
+  const isSecondExit = updates.horaSegundaSalida !== undefined;
+  const nextHoraSalida = isSecondExit
+    ? clampStr(existingPatient.horaSalida, 10)
+    : clampStr(updates.horaSalida, 10);
+  const nextHoraSegundaSalida = isSecondExit
+    ? clampStr(updates.horaSegundaSalida, 10)
+    : undefined;
 
   try {
     await runTransaction(db, async (tx) => {
@@ -934,9 +967,9 @@ export async function registerDischargeInCloud(
         );
       }
 
-      tx.update(ref, {
+      const payload: Record<string, unknown> = {
         fechaSalida: nextFechaSalida,
-        horaSalida: clampStr(updates.horaSalida, 10),
+        horaSalida: nextHoraSalida,
         estadoEgreso: updates.estadoEgreso,
         tipoAltaHospitalizacion: nextTipoAlta,
         destinoTraslado: nextDestino,
@@ -949,12 +982,22 @@ export async function registerDischargeInCloud(
         updatedByUid: actor.uid,
         updatedByEmail: clampStr(actor.email || '', 200),
         version: currentVersion + 1,
-      });
+      };
+      if (nextHoraSegundaSalida !== undefined) {
+        payload.horaSegundaSalida = nextHoraSegundaSalida;
+      }
+
+      tx.update(ref, payload);
     });
 
     const patientLabel = existingPatient.nombre || 'paciente';
-    const timeSuffix = updates.horaSalida.trim() ? ` a las ${updates.horaSalida.trim()}` : '';
-    let auditSummary = `Registró salida (${updates.estadoEgreso}) de ${patientLabel}${timeSuffix}`;
+    const effectiveExitTime = isSecondExit
+      ? (nextHoraSegundaSalida || '').trim()
+      : nextHoraSalida.trim();
+    const timeSuffix = effectiveExitTime ? ` a las ${effectiveExitTime}` : '';
+    let auditSummary = isSecondExit
+      ? `Registró segunda salida (${updates.estadoEgreso}) de ${patientLabel}${timeSuffix}`
+      : `Registró salida (${updates.estadoEgreso}) de ${patientLabel}${timeSuffix}`;
     if (updates.estadoEgreso === 'hospitalizado') {
       auditSummary = `Registró hospitalización de ${patientLabel}${timeSuffix}`;
     } else if (updates.estadoEgreso === 'trasladado') {
@@ -968,6 +1011,82 @@ export async function registerDischargeInCloud(
       action: 'register_discharge',
       actor,
       summary: auditSummary,
+      affectedCount: 1,
+      patientId: existingPatient.id,
+    });
+  } catch (error) {
+    if (error instanceof ConcurrencyConflictError) {
+      throw error;
+    }
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function registerReadmissionInCloud(
+  existingPatient: PatientRecord,
+  updates: {
+    horaSegundaEntrada: string;
+    fechaSegundaEntrada: string;
+  },
+  actor: User
+): Promise<void> {
+  const path = `patients/${existingPatient.id}`;
+  const ref = doc(db, 'patients', existingPatient.id);
+  const nowIso = new Date().toISOString();
+  const nextHoraSegundaEntrada = clampStr(updates.horaSegundaEntrada, 10);
+  const nextFechaSegundaEntrada = normalizeIsoDate(updates.fechaSegundaEntrada) || getTodayIsoDate();
+
+  try {
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) {
+        throw new ConcurrencyConflictError(
+          'Este registro ya fue eliminado desde otro dispositivo.'
+        );
+      }
+      const data = snap.data();
+      const currentVersion = typeof data.version === 'number' ? (data.version as number) : 1;
+      if (currentVersion !== existingPatient.version) {
+        throw new ConcurrencyConflictError(
+          'Otro dispositivo actualizó este paciente hace unos instantes. Revisa la versión actualizada antes de guardar.'
+        );
+      }
+
+      const prevCount =
+        typeof data.reingresosCount === 'number' && Number.isFinite(data.reingresosCount)
+          ? Math.max(0, Math.min(100, Math.floor(data.reingresosCount)))
+          : typeof data.horaSegundaEntrada === 'string' && data.horaSegundaEntrada.trim().length > 0
+            ? 1
+            : 0;
+      const isEditingOpenReadmission =
+        data.estadoEgreso === 'en_atencion' &&
+        typeof data.horaSegundaEntrada === 'string' &&
+        data.horaSegundaEntrada.trim().length > 0 &&
+        !(typeof data.horaSegundaSalida === 'string' && data.horaSegundaSalida.trim().length > 0);
+      const nextCount = isEditingOpenReadmission
+        ? Math.max(1, prevCount)
+        : Math.min(100, prevCount + 1);
+
+      tx.update(ref, {
+        fechaSegundaEntrada: nextFechaSegundaEntrada,
+        horaSegundaEntrada: nextHoraSegundaEntrada,
+        horaSegundaSalida: '',
+        reingresosCount: nextCount,
+        estadoEgreso: 'en_atencion',
+        updatedAt: serverTimestamp(),
+        updatedAtIso: nowIso,
+        updatedByUid: actor.uid,
+        updatedByEmail: clampStr(actor.email || '', 200),
+        version: currentVersion + 1,
+      });
+    });
+
+    const patientLabel = existingPatient.nombre || 'paciente';
+    const timeSuffix = nextHoraSegundaEntrada ? ` a las ${nextHoraSegundaEntrada}` : '';
+    await writeAuditLog({
+      action: 'register_readmission',
+      actor,
+      summary: `Registró reingreso de ${patientLabel}${timeSuffix}`,
       affectedCount: 1,
       patientId: existingPatient.id,
     });
@@ -1073,8 +1192,17 @@ export async function importPatientsBatchToCloud(
           version: 1,
           fechaRegistro,
           fechaSalida: normalizeIsoDate(item.fechaSalida),
+          fechaSegundaEntrada: normalizeIsoDate(item.fechaSegundaEntrada),
           horaEntrada: clampStr(item.horaEntrada, 10),
           horaSalida: clampStr(item.horaSalida, 10),
+          horaSegundaEntrada: clampStr(item.horaSegundaEntrada || '', 10),
+          horaSegundaSalida: clampStr(item.horaSegundaSalida || '', 10),
+          reingresosCount:
+            typeof item.reingresosCount === 'number' && Number.isFinite(item.reingresosCount)
+              ? Math.max(0, Math.min(100, Math.floor(item.reingresosCount)))
+              : clampStr(item.horaSegundaEntrada || '', 10)
+                ? 1
+                : 0,
           estadoEgreso: parseOutcome(item.estadoEgreso, item.horaSalida),
           tipoAltaHospitalizacion: parseHospitalizationDischargeType(item.tipoAltaHospitalizacion),
           destinoTraslado: clampStr(item.destinoTraslado || '', 200),

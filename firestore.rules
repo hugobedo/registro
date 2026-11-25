@@ -112,8 +112,9 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'id', 'workspaceId', 'createdAt', 'updatedAt', 'createdAtIso', 'updatedAtIso',
           'createdByUid', 'createdByEmail', 'updatedByUid', 'updatedByEmail', 'version',
-          'fechaRegistro', 'fechaSalida',
-          'horaEntrada', 'horaSalida', 'estadoEgreso', 'tipoAltaHospitalizacion', 'destinoTraslado', 'tratamiento', 'nombre', 'edad',
+          'fechaRegistro', 'fechaSalida', 'fechaSegundaEntrada',
+          'horaEntrada', 'horaSalida', 'horaSegundaEntrada', 'horaSegundaSalida', 'reingresosCount',
+          'estadoEgreso', 'tipoAltaHospitalizacion', 'destinoTraslado', 'tratamiento', 'nombre', 'edad',
           'procedencia', 'motivoVisita', 'observaciones', 'observacionesSalida',
           'medico', 'enfermera', 'diagnostico'
         ])
@@ -132,8 +133,12 @@ service cloud.firestore {
         && data.version is int && data.version >= 1 && data.version <= 1000000
         && (!('fechaRegistro' in data) || (data.fechaRegistro is string && data.fechaRegistro.size() <= 10 && (data.fechaRegistro == '' || data.fechaRegistro.matches('^\\d{4}-\\d{2}-\\d{2}$'))))
         && (!('fechaSalida' in data) || (data.fechaSalida is string && data.fechaSalida.size() <= 10 && (data.fechaSalida == '' || data.fechaSalida.matches('^\\d{4}-\\d{2}-\\d{2}$'))))
+        && (!('fechaSegundaEntrada' in data) || (data.fechaSegundaEntrada is string && data.fechaSegundaEntrada.size() <= 10 && (data.fechaSegundaEntrada == '' || data.fechaSegundaEntrada.matches('^\\d{4}-\\d{2}-\\d{2}$'))))
         && data.horaEntrada is string && data.horaEntrada.size() <= 10
         && data.horaSalida is string && data.horaSalida.size() <= 10
+        && (!('horaSegundaEntrada' in data) || (data.horaSegundaEntrada is string && data.horaSegundaEntrada.size() <= 10))
+        && (!('horaSegundaSalida' in data) || (data.horaSegundaSalida is string && data.horaSegundaSalida.size() <= 10))
+        && (!('reingresosCount' in data) || (data.reingresosCount is int && data.reingresosCount >= 0 && data.reingresosCount <= 100))
         && data.estadoEgreso in ['en_atencion', 'atendido', 'no_espero_turno', 'no_atendido', 'trasladado', 'hospitalizado']
         && (!('tipoAltaHospitalizacion' in data) || (data.tipoAltaHospitalizacion in ['', 'alta_medica', 'alta_voluntaria']))
         && (!('destinoTraslado' in data) || (data.destinoTraslado is string && data.destinoTraslado.size() <= 200))
@@ -183,7 +188,7 @@ service cloud.firestore {
         && data.id == logId
         && data.workspaceId == 'acemed_guardia'
         && data.action in [
-          'create_patient', 'update_patient', 'register_discharge',
+          'create_patient', 'update_patient', 'register_discharge', 'register_readmission',
           'delete_patient', 'delete_all_patients', 'restore_backup',
           'migrate_local', 'update_staff',
           'approve_access_request', 'reject_access_request', 'revoke_staff_access'
@@ -362,20 +367,26 @@ service cloud.firestore {
         && (
           // Action 1: Admin full update of mutable clinical fields
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
-            'fechaRegistro', 'fechaSalida', 'horaEntrada', 'horaSalida', 'estadoEgreso', 'tipoAltaHospitalizacion', 'destinoTraslado', 'tratamiento', 'nombre', 'edad',
+            'fechaRegistro', 'fechaSalida', 'fechaSegundaEntrada',
+            'horaEntrada', 'horaSalida', 'horaSegundaEntrada', 'horaSegundaSalida', 'reingresosCount',
+            'estadoEgreso', 'tipoAltaHospitalizacion', 'destinoTraslado', 'tratamiento', 'nombre', 'edad',
             'procedencia', 'motivoVisita', 'observaciones', 'observacionesSalida',
             'medico', 'enfermera', 'diagnostico',
             'updatedAt', 'updatedAtIso', 'updatedByUid', 'updatedByEmail', 'version'
           ]))
-          // Action 2: Approved staff registering or updating discharge, hospitalization, or transfer details
+          // Action 2: Approved staff registering or updating discharge, readmission, hospitalization, or transfer details
           || (incoming().diff(existing()).affectedKeys().hasOnly([
-            'fechaSalida', 'horaSalida', 'estadoEgreso', 'tipoAltaHospitalizacion', 'destinoTraslado', 'observacionesSalida',
+            'fechaSalida', 'fechaSegundaEntrada',
+            'horaSalida', 'horaSegundaEntrada', 'horaSegundaSalida', 'reingresosCount',
+            'estadoEgreso', 'tipoAltaHospitalizacion', 'destinoTraslado', 'observacionesSalida',
             'medico', 'enfermera', 'diagnostico',
             'updatedAt', 'updatedAtIso', 'updatedByUid', 'updatedByEmail', 'version'
           ]))
           // Action 3: Approved staff editing patient registration details (cannot delete)
           || (incoming().diff(existing()).affectedKeys().hasOnly([
-            'fechaRegistro', 'fechaSalida', 'horaEntrada', 'horaSalida', 'estadoEgreso', 'tipoAltaHospitalizacion', 'destinoTraslado', 'tratamiento', 'nombre', 'edad',
+            'fechaRegistro', 'fechaSalida', 'fechaSegundaEntrada',
+            'horaEntrada', 'horaSalida', 'horaSegundaEntrada', 'horaSegundaSalida', 'reingresosCount',
+            'estadoEgreso', 'tipoAltaHospitalizacion', 'destinoTraslado', 'tratamiento', 'nombre', 'edad',
             'procedencia', 'motivoVisita', 'observaciones', 'observacionesSalida',
             'medico', 'enfermera', 'diagnostico',
             'updatedAt', 'updatedAtIso', 'updatedByUid', 'updatedByEmail', 'version'

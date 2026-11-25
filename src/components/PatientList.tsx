@@ -10,6 +10,7 @@ import {
   LogOut,
   MessageSquare,
   Pencil,
+  RotateCcw,
   Search,
   Trash2,
   UserX,
@@ -25,6 +26,7 @@ import {
 import {
   computeShiftCounts,
   getPatientOutcome,
+  hasReadmission,
   hasRegisteredExit,
   type MessageType,
   type PatientOutcome,
@@ -36,7 +38,7 @@ import {
   formatTime12h,
 } from '../utils/time';
 
-export type OutcomeFilter = 'todos' | PatientOutcome;
+export type OutcomeFilter = 'todos' | PatientOutcome | 'reingreso';
 
 interface PatientListProps {
   patients: PatientRecord[];
@@ -48,6 +50,7 @@ interface PatientListProps {
   onOpenDischarge: (patient: PatientRecord) => void;
   onOpenHospitalization: (patient: PatientRecord) => void;
   onOpenTransfer: (patient: PatientRecord) => void;
+  onOpenReadmission: (patient: PatientRecord) => void;
   onOpenWhatsApp: (patient: PatientRecord, type: MessageType) => void;
   onDeletePatient: (patient: PatientRecord) => void;
   onOpenNewForm: () => void;
@@ -74,6 +77,8 @@ function getCategoryTitle(filter: OutcomeFilter): string {
       return 'Trasladados';
     case 'hospitalizado':
       return 'Hospitalización';
+    case 'reingreso':
+      return 'Reingreso';
     default:
       return 'Todos los pacientes';
   }
@@ -136,6 +141,7 @@ export function PatientList({
   onOpenDischarge,
   onOpenHospitalization,
   onOpenTransfer,
+  onOpenReadmission,
   onOpenWhatsApp,
   onDeletePatient,
   onOpenNewForm,
@@ -163,7 +169,12 @@ export function PatientList({
 
     return sortedPatients.filter((patient) => {
       const outcome = getPatientOutcome(patient);
-      if (filter !== 'todos' && outcome !== filter) return false;
+      const isReadmitted = hasReadmission(patient);
+      if (filter === 'reingreso') {
+        if (!isReadmitted) return false;
+      } else if (filter !== 'todos' && outcome !== filter) {
+        return false;
+      }
       if (tokens.length === 0) return true;
 
       const haystack = normalizeForSearch(
@@ -182,11 +193,18 @@ export function PatientList({
           formatIsoDateEs(patient.fechaRegistro),
           patient.fechaSalida,
           formatIsoDateEs(patient.fechaSalida),
+          patient.fechaSegundaEntrada,
+          formatIsoDateEs(patient.fechaSegundaEntrada),
           getHospitalizationDischargeLabel(patient.tipoAltaHospitalizacion),
           patient.horaEntrada,
           formatTime12h(patient.horaEntrada),
           patient.horaSalida,
           formatTime12h(patient.horaSalida),
+          patient.horaSegundaEntrada,
+          formatTime12h(patient.horaSegundaEntrada),
+          patient.horaSegundaSalida,
+          formatTime12h(patient.horaSegundaSalida),
+          isReadmitted ? 'reingreso' : '',
           getOutcomeLabel(outcome),
         ].join(' ')
       );
@@ -203,6 +221,7 @@ export function PatientList({
     { id: 'no_atendido', label: 'No atendidos', count: counts.noAtendidos },
     { id: 'trasladado', label: 'Trasladados', count: counts.trasladados },
     { id: 'hospitalizado', label: 'Hospitalización', count: counts.hospitalizados },
+    { id: 'reingreso', label: 'Reingreso', count: counts.reingresos },
   ];
 
   const hasActiveFilter = searchQuery.trim().length > 0 || filter !== 'todos';
@@ -374,6 +393,7 @@ export function PatientList({
           {filteredPatients.map((patient) => {
             const outcome = getPatientOutcome(patient);
             const isHospitalized = outcome === 'hospitalizado';
+            const isReadmitted = hasReadmission(patient);
             const isExited = hasRegisteredExit(patient);
             const isEditing = editingPatientId === patient.id;
             const treatmentLabel = getTreatmentHeader(patient.tratamiento);
@@ -385,6 +405,8 @@ export function PatientList({
             );
             const formattedEntry = formatTime12h(patient.horaEntrada);
             const formattedExit = formatTime12h(patient.horaSalida);
+            const formattedSecondEntry = formatTime12h(patient.horaSegundaEntrada);
+            const formattedSecondExit = formatTime12h(patient.horaSegundaSalida);
 
             const hasDetailFields = Boolean(
               dischargeTypeLabel ||
@@ -433,13 +455,25 @@ export function PatientList({
 
                       {formattedEntry && (
                         <span className="font-mono font-semibold tabular-nums text-slate-900">
-                          Entrada {formattedEntry}
+                          {isReadmitted ? '1ª Entrada' : 'Entrada'} {formattedEntry}
                         </span>
                       )}
 
                       {formattedExit && (
                         <span className="font-mono font-semibold tabular-nums text-teal-900">
-                          Salida {formattedExit}
+                          {isReadmitted ? '1ª Salida' : 'Salida'} {formattedExit}
+                        </span>
+                      )}
+
+                      {formattedSecondEntry && (
+                        <span className="font-mono font-semibold tabular-nums text-violet-900">
+                          2ª Entrada {formattedSecondEntry}
+                        </span>
+                      )}
+
+                      {formattedSecondExit && (
+                        <span className="font-mono font-semibold tabular-nums text-violet-800">
+                          2ª Salida {formattedSecondExit}
                         </span>
                       )}
 
@@ -458,7 +492,13 @@ export function PatientList({
                   </div>
 
                   {/* Estado visual claro */}
-                  <div className="whitespace-nowrap shrink-0 text-xs font-bold">
+                  <div className="flex flex-wrap items-center gap-1.5 whitespace-nowrap shrink-0 text-xs font-bold">
+                    {isReadmitted && (
+                      <span className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1 text-violet-900">
+                        <RotateCcw className="h-3.5 w-3.5 shrink-0 text-violet-700" aria-hidden="true" />
+                        <span>Reingreso</span>
+                      </span>
+                    )}
                     <OutcomeStatusText outcome={outcome} />
                   </div>
                 </div>
@@ -632,6 +672,19 @@ export function PatientList({
                   >
                     <Ambulance className="h-3.5 w-3.5" aria-hidden="true" />
                     <span>Traslado</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onOpenReadmission(patient)}
+                    className={`inline-flex min-h-[42px] items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${
+                      isReadmitted
+                        ? 'border-violet-700 bg-violet-700 text-white hover:bg-violet-800'
+                        : 'border-violet-300 bg-violet-50 text-violet-900 hover:bg-violet-100'
+                    }`}
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Reingreso</span>
                   </button>
 
                   <button

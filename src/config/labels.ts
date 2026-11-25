@@ -33,6 +33,12 @@ export const PROCEDENCIA_LABEL = 'Procedencia';
 export const FIELD_LABELS = {
   horaEntrada: 'Hora de entrada',
   horaSalida: 'Hora de salida',
+  primeraEntrada: 'Primera entrada',
+  primeraSalida: 'Primera salida',
+  segundaEntrada: 'Segunda entrada',
+  segundaSalida: 'Segunda salida',
+  fechaSegundaEntrada: 'Fecha de segunda entrada',
+  reingreso: 'Reingreso',
   fechaSalida: 'Fecha de salida',
   estadoEgreso: 'Estado de egreso',
   tipoAltaHospitalizacion: 'Tipo de alta',

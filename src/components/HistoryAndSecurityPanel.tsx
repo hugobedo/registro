@@ -59,6 +59,8 @@ function getAuditActionLabel(action: AuditActionType): string {
       return 'Edición';
     case 'register_discharge':
       return 'Registro de salida';
+    case 'register_readmission':
+      return 'Reingreso';
     case 'delete_patient':
       return 'Eliminación individual';
     case 'delete_all_patients':

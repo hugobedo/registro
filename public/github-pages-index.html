@@ -204,6 +204,7 @@
       hospitalizedDischargeModal: null,
       hospitalizationModal: null,
       transferModal: null,
+      readmissionModal: null,
       whatsappModal: null,
       reportModalOpen: false,
       clearModal: null,
@@ -385,9 +386,21 @@
       return `${prefix}_${idPart}`.slice(0, 120);
     }
 
+    function hasReadmission(p) {
+      return Boolean((p?.horaSegundaEntrada || '').trim() || (typeof p?.reingresosCount === 'number' && p.reingresosCount > 0));
+    }
+
+    function hasActiveReadmission(p) {
+      return p?.estadoEgreso === 'en_atencion' && Boolean((p?.horaSegundaEntrada || '').trim()) && !(p?.horaSegundaSalida || '').trim();
+    }
+
     function getOutcome(p) {
       if (['atendido', 'no_espero_turno', 'no_atendido', 'trasladado', 'hospitalizado'].includes(p.estadoEgreso)) {
         return p.estadoEgreso;
+      }
+      if (hasActiveReadmission(p)) return 'en_atencion';
+      if (hasReadmission(p)) {
+        return (p.horaSegundaSalida || '').trim() ? 'atendido' : 'en_atencion';
       }
       return (p.horaSalida || '').trim() ? 'atendido' : 'en_atencion';
     }
@@ -423,6 +436,7 @@
         case 'no_atendido': return 'No atendidos';
         case 'trasladado': return 'Trasladados';
         case 'hospitalizado': return 'Hospitalización';
+        case 'reingreso': return 'Reingreso';
         default: return 'Todos los pacientes';
       }
     }
@@ -445,7 +459,7 @@
     }
 
     function computeCounts(list) {
-      const c = { total: list.length, enAtencion: 0, atendidos: 0, noEsperoTurno: 0, noAtendidos: 0, trasladados: 0, hospitalizados: 0 };
+      const c = { total: list.length, enAtencion: 0, atendidos: 0, noEsperoTurno: 0, noAtendidos: 0, trasladados: 0, hospitalizados: 0, reingresos: 0 };
       for (const p of list) {
         const o = getOutcome(p);
         if (o === 'atendido') c.atendidos++;
@@ -454,6 +468,7 @@
         else if (o === 'trasladado') c.trasladados++;
         else if (o === 'hospitalizado') c.hospitalizados++;
         else c.enAtencion++;
+        if (hasReadmission(p)) c.reingresos++;
       }
       return c;
     }
@@ -636,13 +651,22 @@
     // =========================================================================
     function buildWhatsAppText(p, type) {
       const outcome = getOutcome(p);
+      const readmitted = hasReadmission(p);
       const lines = ['REGISTRO DE USUARIOS'];
       const add = (label, val) => {
         const clean = String(val || '').trim();
         if (clean) lines.push(`${label}: ${clean}`);
       };
-      add('Hora de entrada', fmt12(p.horaEntrada));
-      add('Hora de salida', fmt12(p.horaSalida));
+      if (readmitted) {
+        add('Primera entrada', fmt12(p.horaEntrada));
+        add('Primera salida', fmt12(p.horaSalida));
+        add('Segunda entrada', fmt12(p.horaSegundaEntrada));
+        add('Segunda salida', fmt12(p.horaSegundaSalida));
+        add('Fecha de reingreso', formatIsoDateEs(p.fechaSegundaEntrada));
+      } else {
+        add('Hora de entrada', fmt12(p.horaEntrada));
+        add('Hora de salida', fmt12(p.horaSalida));
+      }
       add('Fecha', formatIsoDateEs(p.fechaRegistro));
       if (type === 'salida') {
         add('Fecha de salida', formatIsoDateEs(p.fechaSalida));
@@ -685,22 +709,35 @@
         `No esperó: ${c.noEsperoTurno}`,
         `No atendidos: ${c.noAtendidos}`,
         `Trasladados: ${c.trasladados}`,
-        `Hospitalización: ${c.hospitalizados}`
+        `Hospitalización: ${c.hospitalizados}`,
+        `Reingreso: ${c.reingresos}`
       ];
       if (sorted.length > 0) {
         lines.push('', 'PACIENTES REGISTRADOS (DEL PRIMERO AL ÚLTIMO)');
         sorted.forEach((p, idx) => {
           const outcome = getOutcome(p);
+          const readmitted = hasReadmission(p);
           const dateStr = formatIsoDateEs(p.fechaRegistro);
           const exitDateStr = formatIsoDateEs(p.fechaSalida);
+          const secondDateStr = formatIsoDateEs(p.fechaSegundaEntrada);
           const dischargeTypeLabel = hospitalizationDischargeLabel(p.tipoAltaHospitalizacion);
           const entry = fmt12(p.horaEntrada);
           const exit = fmt12(p.horaSalida);
-          const parts = [`${idx + 1}. [${outcomeLabel(outcome)}]`];
+          const secondEntry = fmt12(p.horaSegundaEntrada);
+          const secondExit = fmt12(p.horaSegundaSalida);
+          const parts = [`${idx + 1}. [${outcomeLabel(outcome)}${readmitted ? ' · Reingreso' : ''}]`];
           if (dateStr) parts.push(`Fecha: ${dateStr}`);
-          if (entry) parts.push(`Hora de entrada: ${entry}`);
+          if (readmitted) {
+            if (entry) parts.push(`Primera entrada: ${entry}`);
+            if (exit) parts.push(`Primera salida: ${exit}`);
+            if (secondEntry) parts.push(`Segunda entrada: ${secondEntry}`);
+            if (secondExit) parts.push(`Segunda salida: ${secondExit}`);
+            if (secondDateStr && secondDateStr !== dateStr) parts.push(`Fecha de reingreso: ${secondDateStr}`);
+          } else {
+            if (entry) parts.push(`Hora de entrada: ${entry}`);
+            if (exit) parts.push(`Hora de salida: ${exit}`);
+          }
           if (exitDateStr) parts.push(`Fecha de salida: ${exitDateStr}`);
-          if (exit) parts.push(`Hora de salida: ${exit}`);
           if (dischargeTypeLabel) parts.push(`Tipo de alta: ${dischargeTypeLabel}`);
           if ((p.nombre || '').trim()) parts.push(`${treatmentLabel(p.tratamiento)}: ${p.nombre.trim()}`);
           if ((p.edad || '').trim()) parts.push(`Edad: ${p.edad.trim()}`);
@@ -783,7 +820,8 @@
         { label: 'Hospitalización:', value: counts.hospitalizados, rgb: [67, 56, 202], row: 0, col: 3 },
         { label: 'No esperó:', value: counts.noEsperoTurno, rgb: [154, 52, 18], row: 1, col: 0 },
         { label: 'No atendidos:', value: counts.noAtendidos, rgb: [185, 28, 28], row: 1, col: 1 },
-        { label: 'Trasladados:', value: counts.trasladados, rgb: [29, 78, 216], row: 1, col: 2 }
+        { label: 'Trasladados:', value: counts.trasladados, rgb: [29, 78, 216], row: 1, col: 2 },
+        { label: 'Reingreso:', value: counts.reingresos, rgb: [109, 40, 217], row: 1, col: 3 }
       ];
       pdf.setFontSize(8);
       for (const cell of cells) {
@@ -826,13 +864,27 @@
       const drawRow = (p, idx) => {
         const o = getOutcome(p);
         const st = stylesMap[o] || stylesMap.en_atencion;
+        const readmitted = hasReadmission(p);
         const dateStr = formatIsoDateEs(p.fechaRegistro);
         const exitDateStr = formatIsoDateEs(p.fechaSalida);
+        const secondDateStr = formatIsoDateEs(p.fechaSegundaEntrada);
         const dischargeTypeLabel = hospitalizationDischargeLabel(p.tipoAltaHospitalizacion);
         const entry = fmt12(p.horaEntrada);
         const exit = fmt12(p.horaSalida);
+        const secondEntry = fmt12(p.horaSegundaEntrada);
+        const secondExit = fmt12(p.horaSegundaSalida);
 
         const detailLines = [];
+        if (readmitted) {
+          const visitParts = [];
+          if (entry) visitParts.push(`Primera entrada: ${entry}`);
+          if (exit) visitParts.push(`Primera salida: ${exit}`);
+          if (secondEntry) visitParts.push(`Segunda entrada: ${secondEntry}`);
+          if (secondExit) visitParts.push(`Segunda salida: ${secondExit}`);
+          if (secondDateStr && secondDateStr !== dateStr) visitParts.push(`Fecha reingreso: ${secondDateStr}`);
+          if (visitParts.length) detailLines.push(visitParts.join('  |  '));
+        }
+
         const idParts = [];
         if ((p.nombre || '').trim()) idParts.push(`${treatmentLabel(p.tratamiento)}: ${p.nombre.trim()}`);
         if ((p.edad || '').trim()) idParts.push(`Edad: ${p.edad.trim()}`);
@@ -881,12 +933,18 @@
         pdf.setTextColor(15, 23, 42);
         const sched = [`#${idx}`];
         if (dateStr) sched.push(dateStr);
-        if (entry) sched.push(`Entrada ${entry}`);
-        if (exit) sched.push(`Salida ${exit}`);
+        if (readmitted) {
+          if (entry) sched.push(`1ª Ent. ${entry}`);
+          if (secondEntry) sched.push(`2ª Ent. ${secondEntry}`);
+          if (secondExit) sched.push(`2ª Sal. ${secondExit}`);
+        } else {
+          if (entry) sched.push(`Entrada ${entry}`);
+          if (exit) sched.push(`Salida ${exit}`);
+        }
         pdf.text(sched.join('  ·  '), margin + 3, hTextY);
 
         pdf.setTextColor(st.text[0], st.text[1], st.text[2]);
-        pdf.text(st.badge, pageW - margin - 3, hTextY, { align: 'right' });
+        pdf.text(readmitted ? `REINGRESO · ${st.badge}` : st.badge, pageW - margin - 3, hTextY, { align: 'right' });
 
         if (bodyCount > 0) {
           let ty = y + headerBarH + 3.6;
@@ -921,7 +979,7 @@
         pdf.setFontSize(7.5);
         pdf.setTextColor(100, 116, 139);
         pdf.text(
-          `ACE-MED · Atendidos: ${counts.atendidos} | Hosp.: ${counts.hospitalizados} | No esperó: ${counts.noEsperoTurno} | No atend.: ${counts.noAtendidos} | Trasl.: ${counts.trasladados} | Activos: ${counts.enAtencion}`,
+          `ACE-MED · Atendidos: ${counts.atendidos} | Hosp.: ${counts.hospitalizados} | No esperó: ${counts.noEsperoTurno} | No atend.: ${counts.noAtendidos} | Trasl.: ${counts.trasladados} | Reing.: ${counts.reingresos} | Activos: ${counts.enAtencion}`,
           margin,
           pageH - 6
         );
@@ -976,9 +1034,20 @@
 
     function mapPatientDoc(id, d) {
       const horaSalida = typeof d.horaSalida === 'string' ? d.horaSalida : '';
+      const horaSegundaEntrada = typeof d.horaSegundaEntrada === 'string' ? d.horaSegundaEntrada : '';
+      const horaSegundaSalida = typeof d.horaSegundaSalida === 'string' ? d.horaSegundaSalida : '';
+      const reingresosCount = typeof d.reingresosCount === 'number' && Number.isFinite(d.reingresosCount) && d.reingresosCount >= 0
+        ? Math.floor(d.reingresosCount)
+        : (horaSegundaEntrada.trim() ? 1 : 0);
       const createdAt = typeof d.createdAtIso === 'string' && d.createdAtIso ? d.createdAtIso : new Date().toISOString();
       const updatedAt = typeof d.updatedAtIso === 'string' && d.updatedAtIso ? d.updatedAtIso : createdAt;
       const fechaRegistro = normalizeIsoDate(d.fechaRegistro) || extractIsoDateFromTimestamp(createdAt);
+      const validOutcome = ['en_atencion', 'atendido', 'no_espero_turno', 'no_atendido', 'trasladado', 'hospitalizado'].includes(d.estadoEgreso);
+      const estadoEgreso = validOutcome
+        ? d.estadoEgreso
+        : (horaSegundaEntrada.trim()
+          ? (horaSegundaSalida.trim() ? 'atendido' : 'en_atencion')
+          : (horaSalida ? 'atendido' : 'en_atencion'));
       return {
         id,
         workspaceId: d.workspaceId || WORKSPACE_ID,
@@ -986,10 +1055,13 @@
         updatedAt,
         fechaRegistro,
         fechaSalida: normalizeIsoDate(d.fechaSalida),
+        fechaSegundaEntrada: normalizeIsoDate(d.fechaSegundaEntrada),
         horaEntrada: typeof d.horaEntrada === 'string' ? d.horaEntrada : '',
         horaSalida,
-        estadoEgreso: ['en_atencion', 'atendido', 'no_espero_turno', 'no_atendido', 'trasladado', 'hospitalizado'].includes(d.estadoEgreso)
-          ? d.estadoEgreso : (horaSalida ? 'atendido' : 'en_atencion'),
+        horaSegundaEntrada,
+        horaSegundaSalida,
+        reingresosCount,
+        estadoEgreso,
         tipoAltaHospitalizacion: parseHospitalizationDischargeType(d.tipoAltaHospitalizacion),
         destinoTraslado: typeof d.destinoTraslado === 'string' ? d.destinoTraslado : '',
         tratamiento: ['paciente', 'usuario', 'usuaria'].includes(d.tratamiento) ? d.tratamiento : 'paciente',
@@ -1090,8 +1162,12 @@
           version: 1,
           fechaRegistro: normalizeIsoDate(form.fechaRegistro) || getTodayIsoDate(),
           fechaSalida: '',
+          fechaSegundaEntrada: '',
           horaEntrada: clamp(form.horaEntrada, 10),
           horaSalida,
+          horaSegundaEntrada: '',
+          horaSegundaSalida: '',
+          reingresosCount: 0,
           estadoEgreso: estado,
           tipoAltaHospitalizacion: '',
           destinoTraslado: clamp(form.destinoTraslado || '', 200),
@@ -1119,8 +1195,22 @@
       const ref = doc(db, 'patients', existing.id);
       const nowIso = new Date().toISOString();
       const horaSalida = clamp(form.horaSalida, 10);
+      const horaSegundaEntrada = clamp(
+        form.horaSegundaEntrada !== undefined ? form.horaSegundaEntrada : (existing.horaSegundaEntrada || ''),
+        10
+      );
+      const horaSegundaSalida = clamp(
+        form.horaSegundaSalida !== undefined ? form.horaSegundaSalida : (existing.horaSegundaSalida || ''),
+        10
+      );
+      const readmitted = Boolean(horaSegundaEntrada || (existing.reingresosCount || 0) > 0);
       const estado = ['atendido', 'no_espero_turno', 'no_atendido', 'trasladado', 'hospitalizado'].includes(form.estadoEgreso)
-        ? form.estadoEgreso : (horaSalida ? 'atendido' : 'en_atencion');
+        ? form.estadoEgreso
+        : (form.estadoEgreso === 'en_atencion' && readmitted && !horaSegundaSalida
+          ? 'en_atencion'
+          : (readmitted
+            ? (horaSegundaSalida ? 'atendido' : 'en_atencion')
+            : (horaSalida ? 'atendido' : 'en_atencion')));
       try {
         await runTransaction(db, async (tx) => {
           const snap = await tx.get(ref);
@@ -1133,6 +1223,10 @@
             fechaRegistro: normalizeIsoDate(form.fechaRegistro) || normalizeIsoDate(existing.fechaRegistro) || getTodayIsoDate(),
             horaEntrada: clamp(form.horaEntrada, 10),
             horaSalida,
+            horaSegundaEntrada,
+            horaSegundaSalida,
+            fechaSegundaEntrada: normalizeIsoDate(existing.fechaSegundaEntrada),
+            reingresosCount: typeof existing.reingresosCount === 'number' ? existing.reingresosCount : (horaSegundaEntrada ? 1 : 0),
             estadoEgreso: estado,
             destinoTraslado: clamp(form.destinoTraslado || '', 200),
             tratamiento: ['paciente', 'usuario', 'usuaria'].includes(form.tratamiento) ? form.tratamiento : 'paciente',
@@ -1174,6 +1268,12 @@
       const nextFechaSalida = updates.fechaSalida !== undefined
         ? normalizeIsoDate(updates.fechaSalida)
         : (updates.estadoEgreso === 'hospitalizado' ? '' : normalizeIsoDate(existing.fechaSalida));
+      const nextHoraSegundaSalida = updates.horaSegundaSalida !== undefined
+        ? clamp(updates.horaSegundaSalida, 10)
+        : clamp(existing.horaSegundaSalida || '', 10);
+      const nextHoraSalida = updates.horaSegundaSalida !== undefined
+        ? clamp(existing.horaSalida || '', 10)
+        : clamp(updates.horaSalida, 10);
       try {
         await runTransaction(db, async (tx) => {
           const snap = await tx.get(ref);
@@ -1184,7 +1284,8 @@
           }
           tx.update(ref, {
             fechaSalida: nextFechaSalida,
-            horaSalida: clamp(updates.horaSalida, 10),
+            horaSalida: nextHoraSalida,
+            horaSegundaSalida: nextHoraSegundaSalida,
             estadoEgreso: updates.estadoEgreso,
             tipoAltaHospitalizacion: nextTipoAlta,
             destinoTraslado: nextDestino,
@@ -1209,6 +1310,48 @@
           auditSummary = `Registró salida de hospitalizado (${hospitalizationDischargeLabel(nextTipoAlta)}) de ${label}${nextFechaSalida ? ` el ${nextFechaSalida}` : ''}`;
         }
         await writeAuditLog('register_discharge', auditSummary, 1, existing.id);
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith('CONFLICT:')) throw err;
+        handleFirestoreError(err, OperationType.UPDATE, path);
+      }
+    }
+
+    async function registerReadmissionCloud(existing, { fechaSegundaEntrada, horaSegundaEntrada }) {
+      const u = state.user;
+      const path = `patients/${existing.id}`;
+      const ref = doc(db, 'patients', existing.id);
+      const nowIso = new Date().toISOString();
+      const safeFecha = normalizeIsoDate(fechaSegundaEntrada) || getTodayIsoDate();
+      const safeHora = clamp(horaSegundaEntrada, 10);
+      const nextCount = Math.min(100, Math.max(1, (typeof existing.reingresosCount === 'number' ? existing.reingresosCount : 0) + 1));
+      try {
+        await runTransaction(db, async (tx) => {
+          const snap = await tx.get(ref);
+          if (!snap.exists()) throw new Error('CONFLICT:Este paciente fue eliminado desde otro dispositivo.');
+          const cur = snap.data();
+          if ((cur.version || 1) !== existing.version) {
+            throw new Error('CONFLICT:Otro dispositivo actualizó este paciente mientras registrabas el reingreso. Vuelve a abrir el registro.');
+          }
+          tx.update(ref, {
+            fechaSegundaEntrada: safeFecha,
+            horaSegundaEntrada: safeHora,
+            horaSegundaSalida: '',
+            reingresosCount: nextCount,
+            estadoEgreso: 'en_atencion',
+            updatedAt: serverTimestamp(),
+            updatedAtIso: nowIso,
+            updatedByUid: u.uid,
+            updatedByEmail: clamp(u.email || '', 200),
+            version: existing.version + 1
+          });
+        });
+        const label = existing.nombre || 'paciente';
+        await writeAuditLog(
+          'register_readmission',
+          `Registró reingreso de ${label}${safeHora ? ` (${fmt12(safeHora)})` : ''}`,
+          1,
+          existing.id
+        );
       } catch (err) {
         if (err instanceof Error && err.message.startsWith('CONFLICT:')) throw err;
         handleFirestoreError(err, OperationType.UPDATE, path);
@@ -1295,8 +1438,14 @@
         existingIds.add(id);
         const nowIso = new Date().toISOString();
         const hs = clamp(item.horaSalida || '', 10);
-        const st = ['atendido', 'no_espero_turno', 'no_atendido', 'trasladado', 'hospitalizado'].includes(item.estadoEgreso)
-          ? item.estadoEgreso : (hs ? 'atendido' : 'en_atencion');
+        const h2e = clamp(item.horaSegundaEntrada || '', 10);
+        const h2s = clamp(item.horaSegundaSalida || '', 10);
+        const rc = typeof item.reingresosCount === 'number' && Number.isFinite(item.reingresosCount) && item.reingresosCount >= 0
+          ? Math.min(100, Math.floor(item.reingresosCount))
+          : (h2e ? 1 : 0);
+        const st = ['en_atencion', 'atendido', 'no_espero_turno', 'no_atendido', 'trasladado', 'hospitalizado'].includes(item.estadoEgreso)
+          ? item.estadoEgreso
+          : (h2e ? (h2s ? 'atendido' : 'en_atencion') : (hs ? 'atendido' : 'en_atencion'));
         toInsert.push({
           id,
           payload: {
@@ -1313,8 +1462,12 @@
             version: 1,
             fechaRegistro: normalizeIsoDate(item.fechaRegistro) || extractIsoDateFromTimestamp(item.createdAt || nowIso) || getTodayIsoDate(),
             fechaSalida: normalizeIsoDate(item.fechaSalida),
+            fechaSegundaEntrada: normalizeIsoDate(item.fechaSegundaEntrada),
             horaEntrada: clamp(item.horaEntrada || '', 10),
             horaSalida: hs,
+            horaSegundaEntrada: h2e,
+            horaSegundaSalida: h2s,
+            reingresosCount: rc,
             estadoEgreso: st,
             tipoAltaHospitalizacion: parseHospitalizationDischargeType(item.tipoAltaHospitalizacion),
             destinoTraslado: clamp(item.destinoTraslado || '', 200),
@@ -1890,6 +2043,8 @@
         editingDate: false,
         horaEntrada: patient.horaEntrada || nowTime24(),
         horaSalida: patient.horaSalida || '',
+        horaSegundaEntrada: patient.horaSegundaEntrada || '',
+        horaSegundaSalida: patient.horaSegundaSalida || '',
         estadoEgreso: getOutcome(patient),
         destinoTraslado: patient.destinoTraslado || '',
         tratamiento: patient.tratamiento || 'paciente',
@@ -1911,9 +2066,11 @@
     function openDischargeModal(patient) {
       stopVoice();
       const alreadyExited = hasExit(patient);
+      const readmitted = hasReadmission(patient);
       state.dischargeModal = {
         patientId: patient.id,
-        horaSalida: patient.horaSalida || nowTime24(),
+        isReadmission: readmitted,
+        horaSalida: readmitted ? (patient.horaSegundaSalida || nowTime24()) : (patient.horaSalida || nowTime24()),
         estadoEgreso: alreadyExited ? getOutcome(patient) : 'atendido',
         destinoTraslado: patient.destinoTraslado || '',
         doctorTitle: detectDoctorTitle(patient.medico),
@@ -1929,11 +2086,13 @@
 
     function openHospitalizedDischargeModal(patient) {
       stopVoice();
+      const readmitted = hasReadmission(patient);
       state.hospitalizedDischargeModal = {
         patientId: patient.id,
+        isReadmission: readmitted,
         tipoAltaHospitalizacion: parseHospitalizationDischargeType(patient.tipoAltaHospitalizacion),
         fechaSalida: normalizeIsoDate(patient.fechaSalida) || getTodayIsoDate(),
-        horaSalida: patient.horaSalida || nowTime24(),
+        horaSalida: readmitted ? (patient.horaSegundaSalida || nowTime24()) : (patient.horaSalida || nowTime24()),
         observacionesSalida: patient.observacionesSalida || '',
         error: ''
       };
@@ -1956,13 +2115,26 @@
 
     function openTransferModal(patient) {
       stopVoice();
+      const readmitted = hasReadmission(patient);
       state.transferModal = {
         patientId: patient.id,
+        isReadmission: readmitted,
         destinoTraslado: patient.destinoTraslado || '',
-        horaSalida: patient.horaSalida || nowTime24(),
+        horaSalida: readmitted ? (patient.horaSegundaSalida || nowTime24()) : (patient.horaSalida || nowTime24()),
         doctorTitle: detectDoctorTitle(patient.medico),
         doctorName: stripDoctorPrefix(patient.medico),
         observacionesSalida: patient.observacionesSalida || '',
+        error: ''
+      };
+      render();
+    }
+
+    function openReadmissionModal(patient) {
+      stopVoice();
+      state.readmissionModal = {
+        patientId: patient.id,
+        fechaSegundaEntrada: getTodayIsoDate(),
+        horaSegundaEntrada: nowTime24(),
         error: ''
       };
       render();
@@ -2105,15 +2277,23 @@
       const q = state.searchQuery.trim().toLowerCase();
       const filtered = sorted.filter((p) => {
         const outcome = getOutcome(p);
-        if (state.statusFilter !== 'todos' && outcome !== state.statusFilter) return false;
+        if (state.statusFilter === 'reingreso') {
+          if (!hasReadmission(p)) return false;
+        } else if (state.statusFilter !== 'todos' && outcome !== state.statusFilter) {
+          return false;
+        }
         if (!q) return true;
         const haystack = [
           p.nombre, p.edad, p.procedencia, p.motivoVisita, p.destinoTraslado, p.observaciones,
           p.observacionesSalida, p.diagnostico, p.medico, p.enfermera,
           p.fechaRegistro, formatIsoDateEs(p.fechaRegistro),
           p.fechaSalida, formatIsoDateEs(p.fechaSalida),
+          p.fechaSegundaEntrada, formatIsoDateEs(p.fechaSegundaEntrada),
           hospitalizationDischargeLabel(p.tipoAltaHospitalizacion),
           p.horaEntrada, fmt12(p.horaEntrada), p.horaSalida, fmt12(p.horaSalida),
+          p.horaSegundaEntrada, fmt12(p.horaSegundaEntrada),
+          p.horaSegundaSalida, fmt12(p.horaSegundaSalida),
+          hasReadmission(p) ? 'reingreso segunda entrada' : '',
           outcomeLabel(outcome)
         ].join(' ').toLowerCase();
         return haystack.includes(q);
@@ -2126,7 +2306,8 @@
         { id: 'no_espero_turno', label: 'No esperó' },
         { id: 'no_atendido', label: 'No atendidos' },
         { id: 'trasladado', label: 'Trasladados' },
-        { id: 'hospitalizado', label: 'Hospitalización' }
+        { id: 'hospitalizado', label: 'Hospitalización' },
+        { id: 'reingreso', label: 'Reingreso' }
       ];
 
       return `
@@ -2191,6 +2372,7 @@
               ${filtered.map((p) => {
                 const outcome = getOutcome(p);
                 const isHospitalized = outcome === 'hospitalizado';
+                const readmitted = hasReadmission(p);
                 const exited = hasExit(p);
                 const orderNum = orderById.get(p.id) || 1;
                 const dateStr = formatIsoDateEs(p.fechaRegistro);
@@ -2198,10 +2380,19 @@
                 const dischargeTypeLabel = hospitalizationDischargeLabel(p.tipoAltaHospitalizacion);
                 const entryStr = fmt12(p.horaEntrada);
                 const exitStr = fmt12(p.horaSalida);
+                const secondEntryStr = fmt12(p.horaSegundaEntrada);
+                const secondExitStr = fmt12(p.horaSegundaSalida);
                 const metaItems = [];
                 if (dateStr) metaItems.push(`<span class="font-mono-num text-slate-800">Fecha: ${esc(dateStr)}</span>`);
-                if (entryStr) metaItems.push(`<span class="font-mono-num text-slate-800">Entrada: ${esc(entryStr)}</span>`);
-                if (exitStr) metaItems.push(`<span class="font-mono-num text-slate-800">Salida: ${esc(exitStr)}</span>`);
+                if (readmitted) {
+                  if (entryStr) metaItems.push(`<span class="font-mono-num text-slate-800">1ª Entrada: ${esc(entryStr)}</span>`);
+                  if (exitStr) metaItems.push(`<span class="font-mono-num text-slate-800">1ª Salida: ${esc(exitStr)}</span>`);
+                  if (secondEntryStr) metaItems.push(`<span class="font-mono-num font-semibold text-violet-900">2ª Entrada: ${esc(secondEntryStr)}</span>`);
+                  if (secondExitStr) metaItems.push(`<span class="font-mono-num font-semibold text-violet-900">2ª Salida: ${esc(secondExitStr)}</span>`);
+                } else {
+                  if (entryStr) metaItems.push(`<span class="font-mono-num text-slate-800">Entrada: ${esc(entryStr)}</span>`);
+                  if (exitStr) metaItems.push(`<span class="font-mono-num text-slate-800">Salida: ${esc(exitStr)}</span>`);
+                }
                 if ((p.edad || '').trim()) metaItems.push(`<span>${esc(p.edad.trim())}</span>`);
                 if ((p.procedencia || '').trim()) metaItems.push(`<span>${esc(p.procedencia.trim())}</span>`);
 
@@ -2226,6 +2417,7 @@
                             ? `<h3 class="text-base font-bold text-slate-900"><span class="font-medium text-slate-600">${esc(treatmentLabel(p.tratamiento))}:</span> ${esc(p.nombre.trim())}</h3>`
                             : `<h3 class="text-base font-bold text-slate-900">Registro #${orderNum}</h3>`}
                           <span class="text-xs font-bold ${outcomeTextColor(outcome)}">${esc(outcomeLabel(outcome))}</span>
+                          ${readmitted ? `<span class="text-xs font-bold text-violet-800">Reingreso</span>` : ''}
                         </div>
 
                         ${metaItems.length > 0 ? `
@@ -2247,6 +2439,14 @@
                               : 'bg-teal-700 text-white hover:bg-teal-800'
                           }">
                           ${isHospitalized ? 'Registrar salida' : exited ? 'Editar salida' : 'Registrar salida'}
+                        </button>
+                        <button type="button" data-action="open-readmission" data-id="${esc(p.id)}"
+                          class="min-h-[40px] rounded-xl border px-3 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                            readmitted
+                              ? 'border-violet-700 bg-violet-700 text-white hover:bg-violet-800'
+                              : 'border-violet-300 bg-violet-50 text-violet-900 hover:bg-violet-100'
+                          }">
+                          Reingreso
                         </button>
                         <button type="button" data-action="open-whatsapp" data-id="${esc(p.id)}" data-type="ingreso"
                           class="min-h-[40px] rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50 whitespace-nowrap shrink-0">
@@ -2603,8 +2803,13 @@
               <div role="dialog" aria-modal="true" aria-label="Registrar salida" class="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 my-auto max-h-[92vh] overflow-y-auto">
                 <div class="flex items-start justify-between gap-3 border-b border-slate-200 pb-3">
                   <div>
-                    <h2 class="text-lg font-bold text-slate-900">Registrar salida de paciente</h2>
-                    <p class="text-xs text-slate-600">${[patient.nombre ? esc(patient.nombre) : '', fmt12(patient.horaEntrada) ? `Entrada: ${esc(fmt12(patient.horaEntrada))}` : ''].filter(Boolean).join(' · ')}</p>
+                    <h2 class="text-lg font-bold text-slate-900">${dm.isReadmission ? 'Registrar segunda salida (Reingreso)' : 'Registrar salida de paciente'}</h2>
+                    <p class="text-xs text-slate-600">${[
+                      patient.nombre ? esc(patient.nombre) : '',
+                      dm.isReadmission
+                        ? (fmt12(patient.horaSegundaEntrada) ? `2ª Entrada: ${esc(fmt12(patient.horaSegundaEntrada))}` : '')
+                        : (fmt12(patient.horaEntrada) ? `Entrada: ${esc(fmt12(patient.horaEntrada))}` : '')
+                    ].filter(Boolean).join(' · ')}</p>
                   </div>
                   <button type="button" data-action="close-discharge" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Cerrar</button>
                 </div>
@@ -2614,7 +2819,7 @@
                 <div class="mt-4 space-y-4">
                   <div class="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                      <label class="block text-xs font-bold text-slate-800 mb-1.5">Hora de salida (formato 12 h)</label>
+                      <label class="block text-xs font-bold text-slate-800 mb-1.5">${dm.isReadmission ? 'Segunda hora de salida (formato 12 h)' : 'Hora de salida (formato 12 h)'}</label>
                       ${renderTime12hControl('discharge-salida', dm.horaSalida)}
                     </div>
                     <button type="button" data-action="spellcheck-discharge" class="min-h-[40px] rounded-xl border border-teal-300 bg-teal-50 px-3.5 py-2 text-xs font-bold text-teal-900 hover:bg-teal-100">Rectificar ortografía</button>
@@ -2758,7 +2963,7 @@
                   </div>
 
                   <div>
-                    <label class="block text-xs font-bold text-slate-800 mb-1.5">Hora de salida (formato 12 h)</label>
+                    <label class="block text-xs font-bold text-slate-800 mb-1.5">${hdm.isReadmission ? 'Segunda hora de salida (formato 12 h)' : 'Hora de salida (formato 12 h)'}</label>
                     ${renderTime12hControl('hosp-discharge-salida', hdm.horaSalida)}
                   </div>
 
@@ -2906,7 +3111,7 @@
                   </div>
 
                   <div>
-                    <label class="block text-xs font-bold text-slate-800 mb-1.5">Hora de salida (formato 12 h)</label>
+                    <label class="block text-xs font-bold text-slate-800 mb-1.5">${tm.isReadmission ? 'Segunda hora de salida (formato 12 h)' : 'Hora de salida (formato 12 h)'}</label>
                     ${renderTime12hControl('transfer-salida', tm.horaSalida)}
                   </div>
 
@@ -2951,6 +3156,104 @@
         }
       }
 
+      // Modal 1d: Reingreso de paciente (1. Primera entrada, 2. Segunda entrada, 3. Datos del paciente)
+      if (state.readmissionModal) {
+        const rm = state.readmissionModal;
+        const patient = state.patients.find((p) => p.id === rm.patientId);
+        if (patient) {
+          const prevEntry = fmt12(patient.horaEntrada) || 'Sin registro';
+          const prevExit = fmt12(patient.horaSalida) || 'Sin registro';
+          const prevDate = formatIsoDateEs(patient.fechaRegistro);
+          const dischargeTypeLabel = hospitalizationDischargeLabel(patient.tipoAltaHospitalizacion);
+          const patientFields = [
+            { label: treatmentLabel(patient.tratamiento), value: patient.nombre },
+            { label: 'Edad', value: patient.edad },
+            { label: 'Procedencia', value: patient.procedencia },
+            { label: 'Motivo de visita', value: patient.motivoVisita },
+            { label: 'Observaciones de ingreso', value: patient.observaciones },
+            { label: 'Médico que lo atendió', value: patient.medico },
+            { label: 'Enfermera que lo atendió', value: patient.enfermera },
+            { label: 'Diagnóstico', value: patient.diagnostico },
+            { label: 'Observaciones de salida', value: patient.observacionesSalida },
+            { label: 'Tipo de alta', value: dischargeTypeLabel },
+            { label: 'Destino del traslado', value: patient.destinoTraslado }
+          ].filter((item) => String(item.value || '').trim().length > 0);
+
+          html += `
+            <div class="fixed inset-0 z-40 flex items-end sm:items-center justify-center bg-slate-950/60 p-0 sm:p-5 overflow-y-auto">
+              <div role="dialog" aria-modal="true" aria-label="Registrar reingreso" class="w-full max-w-2xl rounded-t-2xl sm:rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 max-h-[92vh] overflow-y-auto">
+                <div class="flex items-start justify-between gap-4 border-b border-slate-200 pb-3">
+                  <div>
+                    <div class="text-[11px] font-bold uppercase tracking-wider text-violet-800">Reingreso de paciente</div>
+                    <h2 class="mt-0.5 text-lg font-bold text-slate-900">Registrar nueva visita sin duplicar registro</h2>
+                    <p class="text-xs text-slate-600">El paciente permanecerá como un solo registro real y pasará a Activos hasta registrar su segunda salida.</p>
+                  </div>
+                  <button type="button" data-action="close-readmission" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Cerrar</button>
+                </div>
+
+                ${rm.error ? `<div role="alert" class="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800">${esc(rm.error)}</div>` : ''}
+
+                <div class="mt-4 space-y-4">
+                  <section class="rounded-xl border border-slate-200 bg-slate-50/80 p-4">
+                    <h3 class="text-xs font-bold uppercase tracking-wide text-slate-700">1. Primera entrada (visita anterior)</h3>
+                    <div class="mt-2.5 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div class="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                        <div class="text-[11px] font-semibold text-slate-500">Hora de entrada</div>
+                        <div class="mt-0.5 font-mono-num text-sm font-bold text-slate-900">${esc(prevEntry)}</div>
+                      </div>
+                      <div class="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                        <div class="text-[11px] font-semibold text-slate-500">Hora de salida</div>
+                        <div class="mt-0.5 font-mono-num text-sm font-bold text-slate-900">${esc(prevExit)}</div>
+                      </div>
+                    </div>
+                    ${prevDate ? `<p class="mt-2 text-[11px] text-slate-500">Fecha de registro inicial: <span class="font-mono-num font-semibold text-slate-700">${esc(prevDate)}</span></p>` : ''}
+                  </section>
+
+                  <section class="rounded-xl border border-violet-200 bg-violet-50/50 p-4">
+                    <h3 class="text-xs font-bold uppercase tracking-wide text-violet-900">2. Segunda entrada (nuevo ingreso)</h3>
+                    <div class="mt-3 space-y-3">
+                      <div>
+                        <label class="block text-xs font-bold text-slate-800 mb-1.5">Hora del nuevo ingreso (formato 12 h)</label>
+                        ${renderTime12hControl('readm-entry', rm.horaSegundaEntrada)}
+                      </div>
+                      <div>
+                        <label for="r-fecha-segunda" class="block text-xs font-bold text-slate-800 mb-1.5">Fecha de reingreso</label>
+                        <div class="flex flex-wrap items-center gap-2">
+                          <input id="r-fecha-segunda" data-readm-field="fechaSegundaEntrada" type="date" value="${esc(rm.fechaSegundaEntrada)}"
+                            class="min-h-[42px] flex-1 min-w-[190px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-sm text-slate-900 focus:border-violet-700 focus:outline-none" />
+                          <button type="button" data-action="readm-date-today" class="min-h-[42px] rounded-xl border border-slate-300 bg-white px-3.5 text-xs font-semibold text-slate-700 hover:bg-slate-100">Hoy</button>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="rounded-xl border border-slate-200 bg-white p-4">
+                    <h3 class="text-xs font-bold uppercase tracking-wide text-slate-700">3. Datos del paciente (conservados)</h3>
+                    ${patientFields.length === 0 ? `
+                      <p class="mt-2 text-xs text-slate-500">Este paciente aún no tiene datos adicionales capturados.</p>
+                    ` : `
+                      <dl class="mt-2.5 grid grid-cols-1 gap-x-4 gap-y-2 text-xs sm:grid-cols-2">
+                        ${patientFields.map((item) => `
+                          <div>
+                            <dt class="font-semibold text-slate-500">${esc(item.label)}</dt>
+                            <dd class="mt-0.5 font-medium text-slate-900">${esc(item.value)}</dd>
+                          </div>
+                        `).join('')}
+                      </dl>
+                    `}
+                  </section>
+                </div>
+
+                <div class="mt-5 flex flex-col-reverse gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:justify-end">
+                  <button type="button" data-action="close-readmission" class="min-h-[42px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700">Cancelar</button>
+                  <button type="button" data-action="save-readmission" data-open-wa="1" ${state.isSaving ? 'disabled' : ''} class="min-h-[42px] rounded-xl border border-emerald-700 bg-emerald-50 px-4 py-2 text-xs font-bold text-emerald-900 hover:bg-emerald-100">Guardar y abrir WhatsApp</button>
+                  <button type="button" data-action="save-readmission" data-open-wa="0" ${state.isSaving ? 'disabled' : ''} class="min-h-[42px] rounded-xl bg-violet-700 px-5 py-2 text-xs font-bold text-white hover:bg-violet-800">Guardar reingreso</button>
+                </div>
+              </div>
+            </div>`;
+        }
+      }
+
       // Modal 2: WhatsApp
       if (state.whatsappModal) {
         const p = state.patients.find((x) => x.id === state.whatsappModal.patientId);
@@ -2987,7 +3290,7 @@
                 </div>
                 <button type="button" data-action="close-report" class="rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700">Cerrar</button>
               </div>
-              <div class="mt-4 grid grid-cols-3 gap-2 text-center text-xs">
+              <div class="mt-4 grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-4">
                 <div class="rounded-xl border border-slate-200 bg-slate-50 p-2"><div class="text-slate-600">Total</div><div class="text-lg font-bold tabular-nums">${c.total}</div></div>
                 <div class="rounded-xl border border-amber-200 bg-amber-50 p-2"><div class="text-amber-900">Activos</div><div class="text-lg font-bold tabular-nums text-amber-900">${c.enAtencion}</div></div>
                 <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-2"><div class="text-emerald-900">Atendidos</div><div class="text-lg font-bold tabular-nums text-emerald-800">${c.atendidos}</div></div>
@@ -2995,6 +3298,7 @@
                 <div class="rounded-xl border border-red-200 bg-red-50 p-2"><div class="text-red-900">No atendidos</div><div class="text-lg font-bold tabular-nums text-red-800">${c.noAtendidos}</div></div>
                 <div class="rounded-xl border border-blue-200 bg-blue-50 p-2"><div class="text-blue-900">Trasladados</div><div class="text-lg font-bold tabular-nums text-blue-800">${c.trasladados}</div></div>
                 <div class="rounded-xl border border-indigo-200 bg-indigo-50 p-2"><div class="text-indigo-900">Hospitalización</div><div class="text-lg font-bold tabular-nums text-indigo-800">${c.hospitalizados}</div></div>
+                <div class="rounded-xl border border-violet-200 bg-violet-50 p-2"><div class="text-violet-900">Reingreso</div><div class="text-lg font-bold tabular-nums text-violet-800">${c.reingresos}</div></div>
               </div>
               <div class="mt-4">
                 <label for="wa-group-url" class="block text-xs font-bold text-slate-800 mb-1">Enlace del grupo de WhatsApp</label>
@@ -3178,7 +3482,7 @@
                 </div>
               </div>
 
-              <div class="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-4 lg:grid-cols-7" role="group" aria-label="Filtrar pacientes por categoría">
+              <div class="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-4 lg:grid-cols-8" role="group" aria-label="Filtrar pacientes por categoría">
                 ${[
                   { id: 'todos', label: 'Total', count: c.total, base: 'border-slate-200 bg-slate-50/70 hover:border-slate-400', active: 'border-slate-900 bg-slate-900 text-white ring-2 ring-slate-900/20', labelCls: 'text-slate-600', numCls: 'text-slate-900' },
                   { id: 'en_atencion', label: 'Activos', count: c.enAtencion, base: 'border-amber-200 bg-amber-50/50 hover:border-amber-400', active: 'border-amber-700 bg-amber-100 ring-2 ring-amber-600/30', labelCls: 'text-amber-900', numCls: 'text-amber-900' },
@@ -3186,7 +3490,8 @@
                   { id: 'no_espero_turno', label: 'No esperó', count: c.noEsperoTurno, base: 'border-orange-200 bg-orange-50/50 hover:border-orange-400', active: 'border-orange-700 bg-orange-100 ring-2 ring-orange-600/30', labelCls: 'text-orange-900', numCls: 'text-orange-800' },
                   { id: 'no_atendido', label: 'No atendidos', count: c.noAtendidos, base: 'border-red-200 bg-red-50/50 hover:border-red-400', active: 'border-red-700 bg-red-100 ring-2 ring-red-600/30', labelCls: 'text-red-900', numCls: 'text-red-800' },
                   { id: 'trasladado', label: 'Trasladados', count: c.trasladados, base: 'border-blue-200 bg-blue-50/50 hover:border-blue-400', active: 'border-blue-700 bg-blue-100 ring-2 ring-blue-600/30', labelCls: 'text-blue-900', numCls: 'text-blue-800' },
-                  { id: 'hospitalizado', label: 'Hospitalización', count: c.hospitalizados, base: 'border-indigo-200 bg-indigo-50/50 hover:border-indigo-400', active: 'border-indigo-700 bg-indigo-100 ring-2 ring-indigo-600/30', labelCls: 'text-indigo-900', numCls: 'text-indigo-800' }
+                  { id: 'hospitalizado', label: 'Hospitalización', count: c.hospitalizados, base: 'border-indigo-200 bg-indigo-50/50 hover:border-indigo-400', active: 'border-indigo-700 bg-indigo-100 ring-2 ring-indigo-600/30', labelCls: 'text-indigo-900', numCls: 'text-indigo-800' },
+                  { id: 'reingreso', label: 'Reingreso', count: c.reingresos, base: 'border-violet-200 bg-violet-50/50 hover:border-violet-400', active: 'border-violet-700 bg-violet-100 ring-2 ring-violet-600/30', labelCls: 'text-violet-900', numCls: 'text-violet-800' }
                 ].map((card) => {
                   const selected = state.activeView === 'pacientes' && state.statusFilter === card.id;
                   const darkSelected = selected && card.id === 'todos';
@@ -3381,6 +3686,15 @@
         return;
       }
 
+      if (target.dataset.readmField && state.readmissionModal) {
+        state.readmissionModal[target.dataset.readmField] = target.value;
+        if (target.dataset.readmField === 'fechaSegundaEntrada') {
+          state.readmissionModal.fechaSegundaEntrada = normalizeIsoDate(target.value) || getTodayIsoDate();
+          render();
+        }
+        return;
+      }
+
       if (target.id === 'delete-passcode' && state.clearModal) {
         state.clearModal.passcode = target.value;
         state.clearModal.error = '';
@@ -3403,6 +3717,12 @@
         return;
       }
 
+      if (target.dataset.readmField === 'fechaSegundaEntrada' && state.readmissionModal) {
+        state.readmissionModal.fechaSegundaEntrada = normalizeIsoDate(target.value) || getTodayIsoDate();
+        render();
+        return;
+      }
+
       if (target.dataset.timePart) {
         const [prefix, part] = target.dataset.timePart.split(':');
         const current =
@@ -3412,7 +3732,9 @@
               ? state.hospitalizedDischargeModal?.horaSalida
               : prefix === 'transfer-salida'
                 ? state.transferModal?.horaSalida
-                : state.dischargeModal?.horaSalida;
+                : prefix === 'readm-entry'
+                  ? state.readmissionModal?.horaSegundaEntrada
+                  : state.dischargeModal?.horaSalida;
         const cur = parse24To12(current || nowTime24());
         cur[part] = target.value;
         const next24 = to24From12(cur.h || '12', cur.m || '00', cur.p || 'AM');
@@ -3420,6 +3742,7 @@
         if (prefix === 'discharge-salida' && state.dischargeModal) state.dischargeModal.horaSalida = next24;
         if (prefix === 'hosp-discharge-salida' && state.hospitalizedDischargeModal) state.hospitalizedDischargeModal.horaSalida = next24;
         if (prefix === 'transfer-salida' && state.transferModal) state.transferModal.horaSalida = next24;
+        if (prefix === 'readm-entry' && state.readmissionModal) state.readmissionModal.horaSegundaEntrada = next24;
         render();
         return;
       }
@@ -3557,6 +3880,7 @@
           if (btn.dataset.prefix === 'discharge-salida' && state.dischargeModal) state.dischargeModal.horaSalida = now;
           if (btn.dataset.prefix === 'hosp-discharge-salida' && state.hospitalizedDischargeModal) state.hospitalizedDischargeModal.horaSalida = now;
           if (btn.dataset.prefix === 'transfer-salida' && state.transferModal) state.transferModal.horaSalida = now;
+          if (btn.dataset.prefix === 'readm-entry' && state.readmissionModal) state.readmissionModal.horaSegundaEntrada = now;
           render();
           break;
         }
@@ -3732,7 +4056,8 @@
         case 'open-discharge': {
           const p = state.patients.find((x) => x.id === btn.dataset.id);
           if (p) {
-            if (getOutcome(p) === 'hospitalizado' || Boolean(p.tipoAltaHospitalizacion)) {
+            const outcome = getOutcome(p);
+            if (outcome === 'hospitalizado' || (outcome !== 'en_atencion' && Boolean(p.tipoAltaHospitalizacion))) {
               openHospitalizedDischargeModal(p);
             } else {
               openDischargeModal(p);
@@ -3767,8 +4092,10 @@
           if (!p) { state.hospitalizedDischargeModal = null; render(); break; }
           state.isSaving = true; render();
           try {
+            const readmitted = hasReadmission(p);
             await registerDischargeCloud(p, {
-              horaSalida: hdm.horaSalida,
+              horaSalida: readmitted ? (p.horaSalida || '') : hdm.horaSalida,
+              ...(readmitted ? { horaSegundaSalida: hdm.horaSalida } : {}),
               fechaSalida: normalizeIsoDate(hdm.fechaSalida) || getTodayIsoDate(),
               estadoEgreso: 'atendido',
               tipoAltaHospitalizacion: hdm.tipoAltaHospitalizacion,
@@ -3808,8 +4135,10 @@
           if (!p) { state.dischargeModal = null; render(); break; }
           state.isSaving = true; render();
           try {
+            const readmitted = hasReadmission(p);
             await registerDischargeCloud(p, {
-              horaSalida: dm.horaSalida,
+              horaSalida: readmitted ? (p.horaSalida || '') : dm.horaSalida,
+              ...(readmitted ? { horaSegundaSalida: dm.horaSalida } : {}),
               estadoEgreso: dm.estadoEgreso,
               destinoTraslado: dm.estadoEgreso === 'trasladado' ? (dm.destinoTraslado || '').trim() : '',
               observacionesSalida: dm.observacionesSalida,
@@ -3892,8 +4221,10 @@
           if (!p) { state.transferModal = null; render(); break; }
           state.isSaving = true; render();
           try {
+            const readmitted = hasReadmission(p);
             await registerDischargeCloud(p, {
-              horaSalida: tm.horaSalida,
+              horaSalida: readmitted ? (p.horaSalida || '') : tm.horaSalida,
+              ...(readmitted ? { horaSegundaSalida: tm.horaSalida } : {}),
               estadoEgreso: 'trasladado',
               destinoTraslado: (tm.destinoTraslado || '').trim(),
               observacionesSalida: tm.observacionesSalida,
@@ -3913,6 +4244,53 @@
               state.transferModal = null;
             } else {
               tm.error = 'No se pudo guardar el traslado. Intenta nuevamente.';
+            }
+          } finally {
+            state.isSaving = false; render();
+          }
+          break;
+        }
+        case 'open-readmission': {
+          const p = state.patients.find((x) => x.id === btn.dataset.id);
+          if (p) openReadmissionModal(p);
+          break;
+        }
+        case 'close-readmission':
+          stopVoice(); state.readmissionModal = null; render(); break;
+        case 'readm-date-today':
+          if (state.readmissionModal) {
+            state.readmissionModal.fechaSegundaEntrada = getTodayIsoDate();
+            render();
+          }
+          break;
+        case 'save-readmission': {
+          if (!state.readmissionModal) break;
+          const rm = state.readmissionModal;
+          if (!(rm.horaSegundaEntrada || '').trim()) {
+            rm.error = 'Indica la hora de la segunda entrada.';
+            render();
+            break;
+          }
+          const p = state.patients.find((x) => x.id === rm.patientId);
+          if (!p) { state.readmissionModal = null; render(); break; }
+          state.isSaving = true; render();
+          try {
+            await registerReadmissionCloud(p, {
+              fechaSegundaEntrada: normalizeIsoDate(rm.fechaSegundaEntrada) || getTodayIsoDate(),
+              horaSegundaEntrada: rm.horaSegundaEntrada
+            });
+            const openWa = btn.dataset.openWa === '1';
+            const pid = p.id;
+            state.readmissionModal = null;
+            showToast('Reingreso registrado y vinculado al paciente sin duplicados.');
+            if (openWa) state.whatsappModal = { patientId: pid, type: 'ingreso' };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : '';
+            if (msg.startsWith('CONFLICT:')) {
+              state.conflictNotice = msg.slice('CONFLICT:'.length);
+              state.readmissionModal = null;
+            } else {
+              rm.error = 'No se pudo guardar el reingreso. Intenta nuevamente.';
             }
           } finally {
             state.isSaving = false; render();
@@ -3981,6 +4359,7 @@
                 if (state.hospitalizedDischargeModal?.patientId === p.id) state.hospitalizedDischargeModal = null;
                 if (state.hospitalizationModal?.patientId === p.id) state.hospitalizationModal = null;
                 if (state.transferModal?.patientId === p.id) state.transferModal = null;
+                if (state.readmissionModal?.patientId === p.id) state.readmissionModal = null;
                 if (state.whatsappModal?.patientId === p.id) state.whatsappModal = null;
               }
               state.clearModal = null;
@@ -3994,6 +4373,7 @@
               state.hospitalizedDischargeModal = null;
               state.hospitalizationModal = null;
               state.transferModal = null;
+              state.readmissionModal = null;
               state.whatsappModal = null;
               state.activeView = 'pacientes';
               showToast(`Se eliminaron ${removed} registros y quedó registrado en auditoría.`);

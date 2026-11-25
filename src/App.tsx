@@ -20,6 +20,7 @@ import { HospitalizationModal } from './components/HospitalizationModal';
 import { HospitalizedDischargeModal } from './components/HospitalizedDischargeModal';
 import { PatientForm } from './components/PatientForm';
 import { PatientList, type OutcomeFilter } from './components/PatientList';
+import { ReadmissionModal } from './components/ReadmissionModal';
 import { ReportModal } from './components/ReportModal';
 import { SpellCheckModal } from './components/SpellCheckModal';
 import { TransferModal } from './components/TransferModal';
@@ -42,6 +43,7 @@ import {
   fetchPendingAccessRequestsFromServer,
   importPatientsBatchToCloud,
   registerDischargeInCloud,
+  registerReadmissionInCloud,
   rejectAccessRequest,
   sanitizeDocId,
   saveShiftConfig,
@@ -134,6 +136,7 @@ export default function App() {
   const [hospitalizedDischargePatientId, setHospitalizedDischargePatientId] = useState<string | null>(null);
   const [hospitalizationPatientId, setHospitalizationPatientId] = useState<string | null>(null);
   const [transferPatientId, setTransferPatientId] = useState<string | null>(null);
+  const [readmissionPatientId, setReadmissionPatientId] = useState<string | null>(null);
   const [whatsAppSession, setWhatsAppSession] = useState<WhatsAppSession | null>(null);
   const [spellCheckSession, setSpellCheckSession] = useState<SpellCheckSession | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<
@@ -427,6 +430,11 @@ export default function App() {
     [patients, transferPatientId]
   );
 
+  const readmissionPatient = useMemo(
+    () => patients.find((p) => p.id === readmissionPatientId) ?? null,
+    [patients, readmissionPatientId]
+  );
+
   const whatsAppPatient = useMemo(
     () =>
       whatsAppSession
@@ -500,6 +508,7 @@ export default function App() {
     targetPatient: PatientRecord,
     updates: {
       horaSalida: string;
+      horaSegundaSalida?: string;
       estadoEgreso: ExitOutcome;
       destinoTraslado?: string;
       observacionesSalida: string;
@@ -587,6 +596,7 @@ export default function App() {
       tipoAltaHospitalizacion: Exclude<HospitalizationDischargeType, ''>;
       fechaSalida: string;
       horaSalida: string;
+      horaSegundaSalida?: string;
       observacionesSalida: string;
     },
     openWhatsAppAfter: boolean
@@ -600,6 +610,9 @@ export default function App() {
         targetPatient,
         {
           horaSalida: updates.horaSalida,
+          ...(updates.horaSegundaSalida !== undefined
+            ? { horaSegundaSalida: updates.horaSegundaSalida }
+            : {}),
           fechaSalida: updates.fechaSalida,
           estadoEgreso: 'atendido',
           tipoAltaHospitalizacion: updates.tipoAltaHospitalizacion,
@@ -634,6 +647,7 @@ export default function App() {
     updates: {
       destinoTraslado: string;
       horaSalida: string;
+      horaSegundaSalida?: string;
       medico: string;
       observacionesSalida: string;
     },
@@ -648,6 +662,9 @@ export default function App() {
         targetPatient,
         {
           horaSalida: updates.horaSalida,
+          ...(updates.horaSegundaSalida !== undefined
+            ? { horaSegundaSalida: updates.horaSegundaSalida }
+            : {}),
           estadoEgreso: 'trasladado',
           destinoTraslado: updates.destinoTraslado,
           medico: updates.medico,
@@ -667,6 +684,38 @@ export default function App() {
       if (error instanceof ConcurrencyConflictError) {
         setConflictNotice(error.message);
         setTransferPatientId(null);
+      } else {
+        throw error;
+      }
+    } finally {
+      setIsSavingRecord(false);
+    }
+  };
+
+  const handleSaveReadmission = async (
+    targetPatient: PatientRecord,
+    updates: {
+      horaSegundaEntrada: string;
+      fechaSegundaEntrada: string;
+    },
+    openWhatsAppAfter: boolean
+  ) => {
+    if (!firebaseUser) return;
+    setIsSavingRecord(true);
+    setConflictNotice(null);
+
+    try {
+      await registerReadmissionInCloud(targetPatient, updates, firebaseUser);
+      setReadmissionPatientId(null);
+      showToast('Reingreso registrado y vinculado al paciente. Ahora figura en Activos.');
+
+      if (openWhatsAppAfter) {
+        setWhatsAppSession({ patientId: targetPatient.id, type: 'ingreso' });
+      }
+    } catch (error) {
+      if (error instanceof ConcurrencyConflictError) {
+        setConflictNotice(error.message);
+        setReadmissionPatientId(null);
       } else {
         throw error;
       }
@@ -761,6 +810,9 @@ export default function App() {
       if (transferPatientId === target.id) {
         setTransferPatientId(null);
       }
+      if (readmissionPatientId === target.id) {
+        setReadmissionPatientId(null);
+      }
       if (whatsAppSession?.patientId === target.id) {
         setWhatsAppSession(null);
       }
@@ -775,6 +827,7 @@ export default function App() {
     setHospitalizedDischargePatientId(null);
     setHospitalizationPatientId(null);
     setTransferPatientId(null);
+    setReadmissionPatientId(null);
     setWhatsAppSession(null);
     setDeleteTarget(null);
     setSelectedCategory('todos');
@@ -996,7 +1049,7 @@ export default function App() {
           <div
             role="group"
             aria-label="Resumen por categoría de pacientes"
-            className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-4 lg:grid-cols-7"
+            className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-4 lg:grid-cols-8"
           >
             {(
               [
@@ -1062,6 +1115,15 @@ export default function App() {
                   activeClass: 'border-indigo-700 bg-indigo-700 text-white ring-2 ring-indigo-700/25',
                   labelClass: 'text-indigo-900',
                   valueClass: 'text-indigo-800',
+                },
+                {
+                  id: 'reingreso' as OutcomeFilter,
+                  label: 'Reingreso',
+                  count: counts.reingresos,
+                  baseClass: 'border-violet-200 bg-violet-50/50 hover:border-violet-400 hover:bg-violet-50',
+                  activeClass: 'border-violet-700 bg-violet-700 text-white ring-2 ring-violet-700/25',
+                  labelClass: 'text-violet-900',
+                  valueClass: 'text-violet-800',
                 },
               ]
             ).map((card) => {
@@ -1181,7 +1243,10 @@ export default function App() {
               }}
               onOpenDischarge={(patient) => {
                 const outcome = getPatientOutcome(patient);
-                if (outcome === 'hospitalizado' || Boolean(patient.tipoAltaHospitalizacion)) {
+                if (
+                  outcome === 'hospitalizado' ||
+                  (outcome !== 'en_atencion' && Boolean(patient.tipoAltaHospitalizacion))
+                ) {
                   setHospitalizedDischargePatientId(patient.id);
                 } else {
                   setDischargePatientId(patient.id);
@@ -1189,6 +1254,7 @@ export default function App() {
               }}
               onOpenHospitalization={(patient) => setHospitalizationPatientId(patient.id)}
               onOpenTransfer={(patient) => setTransferPatientId(patient.id)}
+              onOpenReadmission={(patient) => setReadmissionPatientId(patient.id)}
               onOpenWhatsApp={(patient, type) =>
                 setWhatsAppSession({ patientId: patient.id, type })
               }
@@ -1340,6 +1406,15 @@ export default function App() {
           onClose={() => setTransferPatientId(null)}
           onSaveTransfer={handleSaveTransfer}
           onRequestSpellCheck={handleRequestSpellCheck}
+        />
+      )}
+
+      {readmissionPatient && (
+        <ReadmissionModal
+          patient={readmissionPatient}
+          isSaving={isSavingRecord}
+          onClose={() => setReadmissionPatientId(null)}
+          onSaveReadmission={handleSaveReadmission}
         />
       )}
 

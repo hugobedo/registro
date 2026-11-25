@@ -4,6 +4,7 @@ import { FIELD_LABELS, getTreatmentHeader } from '../config/labels';
 import { appendDictatedText, useVoiceDictation } from '../hooks/useVoiceDictation';
 import {
   getPatientOutcome,
+  hasReadmission,
   type PatientRecord,
   type ReviewableFieldKey,
 } from '../types/patient';
@@ -25,6 +26,7 @@ interface TransferModalProps {
     updates: {
       destinoTraslado: string;
       horaSalida: string;
+      horaSegundaSalida?: string;
       medico: string;
       observacionesSalida: string;
     },
@@ -44,11 +46,13 @@ export function TransferModal({
   onRequestSpellCheck,
 }: TransferModalProps) {
   const isAlreadyTransferred = getPatientOutcome(patient) === 'trasladado';
+  const isReadmitted = hasReadmission(patient);
 
   const [destinoTraslado, setDestinoTraslado] = useState(patient.destinoTraslado || '');
-  const [horaSalida, setHoraSalida] = useState(
-    patient.horaSalida.trim() ? normalizeTime24h(patient.horaSalida) : getCurrentTime24h()
-  );
+  const [horaSalida, setHoraSalida] = useState(() => {
+    const sourceTime = isReadmitted ? patient.horaSegundaSalida : patient.horaSalida;
+    return sourceTime.trim() ? normalizeTime24h(sourceTime) : getCurrentTime24h();
+  });
   const [doctorTitle, setDoctorTitle] = useState<DoctorTitle>(() =>
     detectDoctorTitle(patient.medico, 'DR.')
   );
@@ -65,12 +69,14 @@ export function TransferModal({
     voice.stopDictation();
 
     const finalMedico = medico.trim() ? formatDoctorName(medico, doctorTitle) : '';
+    const normalizedExit = normalizeTime24h(horaSalida);
 
     await onSaveTransfer(
       patient,
       {
         destinoTraslado: destinoTraslado.trim(),
-        horaSalida: normalizeTime24h(horaSalida),
+        horaSalida: isReadmitted ? patient.horaSalida : normalizedExit,
+        ...(isReadmitted ? { horaSegundaSalida: normalizedExit } : {}),
         medico: finalMedico,
         observacionesSalida,
       },
@@ -233,7 +239,7 @@ export function TransferModal({
               htmlFor="transfer-horaSalida"
               className="block text-sm font-semibold text-slate-800"
             >
-              {FIELD_LABELS.horaSalida} (12 h)
+              {isReadmitted ? FIELD_LABELS.segundaSalida : FIELD_LABELS.horaSalida} (12 h)
             </label>
             <TimeInput12h
               id="transfer-horaSalida"
