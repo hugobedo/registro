@@ -9,6 +9,8 @@ import {
 import {
   computeShiftCounts,
   getPatientOutcome,
+  hasDistinctDischargeDoctor,
+  hasDistinctDischargeNurse,
   hasReadmission,
   type PatientOutcome,
   type PatientRecord,
@@ -303,10 +305,20 @@ export function generateShiftPdfReport({ patients, responsableGuardia }: ReportO
     }
 
     const staffParts: string[] = [];
-    if (patient.medico.trim()) {
+    if (hasDistinctDischargeDoctor(patient)) {
+      if (patient.medico.trim()) {
+        staffParts.push(`${FIELD_LABELS.medicoIngreso}: ${patient.medico.trim()}`);
+      }
+      staffParts.push(`${FIELD_LABELS.medicoSalida}: ${patient.medicoSalida.trim()}`);
+    } else if (patient.medico.trim()) {
       staffParts.push(`${FIELD_LABELS.medico}: ${patient.medico.trim()}`);
     }
-    if (patient.enfermera.trim()) {
+    if (hasDistinctDischargeNurse(patient)) {
+      if (patient.enfermera.trim()) {
+        staffParts.push(`${FIELD_LABELS.enfermeraIngreso}: ${patient.enfermera.trim()}`);
+      }
+      staffParts.push(`${FIELD_LABELS.enfermeraSalida}: ${patient.enfermeraSalida.trim()}`);
+    } else if (patient.enfermera.trim()) {
       staffParts.push(`${FIELD_LABELS.enfermera}: ${patient.enfermera.trim()}`);
     }
     if (patient.diagnostico.trim()) {

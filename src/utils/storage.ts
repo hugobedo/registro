@@ -99,6 +99,8 @@ export function sanitizePatientRecord(raw: unknown): PatientRecord | null {
       typeof item.observacionesSalida === 'string' ? item.observacionesSalida : '',
     medico: typeof item.medico === 'string' ? item.medico : '',
     enfermera: typeof item.enfermera === 'string' ? item.enfermera : '',
+    medicoSalida: typeof item.medicoSalida === 'string' ? item.medicoSalida : '',
+    enfermeraSalida: typeof item.enfermeraSalida === 'string' ? item.enfermeraSalida : '',
     diagnostico: typeof item.diagnostico === 'string' ? item.diagnostico : '',
     version: typeof item.version === 'number' && item.version >= 1 ? item.version : 1,
   };

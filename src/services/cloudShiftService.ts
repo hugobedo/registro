@@ -20,6 +20,7 @@ import {
   DEFAULT_SHIFT_SUPERVISOR,
   DEFAULT_WHATSAPP_GROUP_URL,
   WORKSPACE_ID,
+  getOutcomeLabel,
 } from '../config/labels';
 import { db } from '../firebase';
 import {
@@ -136,6 +137,8 @@ function mapDocToPatient(id: string, data: Record<string, unknown>): PatientReco
       typeof data.observacionesSalida === 'string' ? data.observacionesSalida : '',
     medico: typeof data.medico === 'string' ? data.medico : '',
     enfermera: typeof data.enfermera === 'string' ? data.enfermera : '',
+    medicoSalida: typeof data.medicoSalida === 'string' ? data.medicoSalida : '',
+    enfermeraSalida: typeof data.enfermeraSalida === 'string' ? data.enfermeraSalida : '',
     diagnostico: typeof data.diagnostico === 'string' ? data.diagnostico : '',
     version: typeof data.version === 'number' && data.version >= 1 ? data.version : 1,
     createdByUid: typeof data.createdByUid === 'string' ? data.createdByUid : undefined,
@@ -806,6 +809,8 @@ export async function createPatientInCloud(
     observacionesSalida: clampStr(values.observacionesSalida, 1500),
     medico: clampStr(values.medico, 200),
     enfermera: clampStr(values.enfermera, 200),
+    medicoSalida: '',
+    enfermeraSalida: '',
     diagnostico: clampStr(values.diagnostico, 1500),
   };
 
@@ -918,6 +923,8 @@ export async function registerDischargeInCloud(
     observacionesSalida: string;
     medico: string;
     enfermera: string;
+    medicoSalida?: string;
+    enfermeraSalida?: string;
     diagnostico: string;
   },
   actor: User
@@ -950,6 +957,28 @@ export async function registerDischargeInCloud(
   const nextHoraSegundaSalida = isSecondExit
     ? clampStr(updates.horaSegundaSalida, 10)
     : undefined;
+  const nextMedico = clampStr(updates.medico, 200);
+  const nextEnfermera = clampStr(updates.enfermera, 200);
+  const rawMedicoSalida =
+    updates.medicoSalida !== undefined
+      ? clampStr(updates.medicoSalida, 200)
+      : updates.estadoEgreso === 'hospitalizado'
+        ? ''
+        : clampStr(existingPatient.medicoSalida || '', 200);
+  const rawEnfermeraSalida =
+    updates.enfermeraSalida !== undefined
+      ? clampStr(updates.enfermeraSalida, 200)
+      : updates.estadoEgreso === 'hospitalizado'
+        ? ''
+        : clampStr(existingPatient.enfermeraSalida || '', 200);
+  const nextMedicoSalida =
+    rawMedicoSalida && rawMedicoSalida.toLowerCase() !== nextMedico.toLowerCase()
+      ? rawMedicoSalida
+      : '';
+  const nextEnfermeraSalida =
+    rawEnfermeraSalida && rawEnfermeraSalida.toLowerCase() !== nextEnfermera.toLowerCase()
+      ? rawEnfermeraSalida
+      : '';
 
   try {
     await runTransaction(db, async (tx) => {
@@ -974,8 +1003,10 @@ export async function registerDischargeInCloud(
         tipoAltaHospitalizacion: nextTipoAlta,
         destinoTraslado: nextDestino,
         observacionesSalida: clampStr(updates.observacionesSalida, 1500),
-        medico: clampStr(updates.medico, 200),
-        enfermera: clampStr(updates.enfermera, 200),
+        medico: nextMedico,
+        enfermera: nextEnfermera,
+        medicoSalida: nextMedicoSalida,
+        enfermeraSalida: nextEnfermeraSalida,
         diagnostico: clampStr(updates.diagnostico, 1500),
         updatedAt: serverTimestamp(),
         updatedAtIso: nowIso,
@@ -1087,6 +1118,136 @@ export async function registerReadmissionInCloud(
       action: 'register_readmission',
       actor,
       summary: `Registró reingreso de ${patientLabel}${timeSuffix}`,
+      affectedCount: 1,
+      patientId: existingPatient.id,
+    });
+  } catch (error) {
+    if (error instanceof ConcurrencyConflictError) {
+      throw error;
+    }
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function correctPatientMovementInCloud(
+  existingPatient: PatientRecord,
+  updates: {
+    estadoEgreso: PatientOutcome;
+    horaSalida: string;
+    fechaSalida: string;
+    tipoAltaHospitalizacion: HospitalizationDischargeType;
+    destinoTraslado: string;
+    removeReadmission: boolean;
+    fechaSegundaEntrada: string;
+    horaSegundaEntrada: string;
+    horaSegundaSalida: string;
+    medico: string;
+    enfermera: string;
+    medicoSalida: string;
+    enfermeraSalida: string;
+    diagnostico: string;
+    observacionesSalida: string;
+  },
+  actor: User
+): Promise<void> {
+  const path = `patients/${existingPatient.id}`;
+  const ref = doc(db, 'patients', existingPatient.id);
+  const nowIso = new Date().toISOString();
+
+  const nextOutcome = updates.estadoEgreso;
+  const nextRemoveReadmission = Boolean(updates.removeReadmission);
+  const nextFechaSegundaEntrada = nextRemoveReadmission
+    ? ''
+    : normalizeIsoDate(updates.fechaSegundaEntrada);
+  const nextHoraSegundaEntrada = nextRemoveReadmission
+    ? ''
+    : clampStr(updates.horaSegundaEntrada, 10);
+  const keepingReadmission =
+    !nextRemoveReadmission &&
+    (nextHoraSegundaEntrada.length > 0 || (existingPatient.reingresosCount || 0) > 0);
+  const nextHoraSegundaSalida =
+    nextRemoveReadmission || nextOutcome === 'en_atencion'
+      ? ''
+      : clampStr(updates.horaSegundaSalida, 10);
+  const nextReingresosCount = nextRemoveReadmission
+    ? 0
+    : nextHoraSegundaEntrada.length > 0
+      ? Math.max(1, existingPatient.reingresosCount || 1)
+      : 0;
+  const nextHoraSalida =
+    nextOutcome === 'en_atencion' && !keepingReadmission ? '' : clampStr(updates.horaSalida, 10);
+  const nextDestinoTraslado =
+    nextOutcome === 'trasladado' ? clampStr(updates.destinoTraslado, 200) : '';
+  const nextTipoAlta: HospitalizationDischargeType =
+    nextOutcome === 'atendido'
+      ? parseHospitalizationDischargeType(updates.tipoAltaHospitalizacion)
+      : '';
+  const nextFechaSalida =
+    nextOutcome === 'atendido' && nextTipoAlta
+      ? normalizeIsoDate(updates.fechaSalida)
+      : '';
+  const nextMedico = clampStr(updates.medico, 200);
+  const nextEnfermera = clampStr(updates.enfermera, 200);
+  const rawMedicoSalida =
+    nextOutcome === 'atendido' && nextTipoAlta ? clampStr(updates.medicoSalida, 200) : '';
+  const rawEnfermeraSalida =
+    nextOutcome === 'atendido' && nextTipoAlta ? clampStr(updates.enfermeraSalida, 200) : '';
+  const nextMedicoSalida =
+    rawMedicoSalida && rawMedicoSalida.toLowerCase() !== nextMedico.toLowerCase()
+      ? rawMedicoSalida
+      : '';
+  const nextEnfermeraSalida =
+    rawEnfermeraSalida && rawEnfermeraSalida.toLowerCase() !== nextEnfermera.toLowerCase()
+      ? rawEnfermeraSalida
+      : '';
+
+  try {
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) {
+        throw new ConcurrencyConflictError(
+          'Este registro ya fue eliminado desde otro dispositivo.'
+        );
+      }
+      const currentVersion =
+        typeof snap.data().version === 'number' ? (snap.data().version as number) : 1;
+      if (currentVersion !== existingPatient.version) {
+        throw new ConcurrencyConflictError(
+          'Otro dispositivo actualizó este paciente hace unos instantes. Revisa la versión actualizada antes de guardar.'
+        );
+      }
+
+      tx.update(ref, {
+        estadoEgreso: nextOutcome,
+        horaSalida: nextHoraSalida,
+        fechaSalida: nextFechaSalida,
+        tipoAltaHospitalizacion: nextTipoAlta,
+        destinoTraslado: nextDestinoTraslado,
+        fechaSegundaEntrada: nextFechaSegundaEntrada,
+        horaSegundaEntrada: nextHoraSegundaEntrada,
+        horaSegundaSalida: nextHoraSegundaSalida,
+        reingresosCount: nextReingresosCount,
+        medico: nextMedico,
+        enfermera: nextEnfermera,
+        medicoSalida: nextMedicoSalida,
+        enfermeraSalida: nextEnfermeraSalida,
+        diagnostico: clampStr(updates.diagnostico, 1500),
+        observacionesSalida: clampStr(updates.observacionesSalida, 1500),
+        updatedAt: serverTimestamp(),
+        updatedAtIso: nowIso,
+        updatedByUid: actor.uid,
+        updatedByEmail: clampStr(actor.email || '', 200),
+        version: currentVersion + 1,
+      });
+    });
+
+    const patientLabel = existingPatient.nombre || 'paciente';
+    const outcomeLabel = getOutcomeLabel(nextOutcome);
+    const readmissionSuffix = nextRemoveReadmission ? ' y eliminó reingreso erróneo' : '';
+    await writeAuditLog({
+      action: 'update_patient',
+      actor,
+      summary: `Corrigió movimiento de ${patientLabel} a ${outcomeLabel}${readmissionSuffix}`,
       affectedCount: 1,
       patientId: existingPatient.id,
     });
@@ -1215,6 +1376,8 @@ export async function importPatientsBatchToCloud(
           observacionesSalida: clampStr(item.observacionesSalida || '', 1500),
           medico: clampStr(item.medico, 200),
           enfermera: clampStr(item.enfermera, 200),
+          medicoSalida: clampStr(item.medicoSalida || '', 200),
+          enfermeraSalida: clampStr(item.enfermeraSalida || '', 200),
           diagnostico: clampStr(item.diagnostico, 1500),
         });
       }

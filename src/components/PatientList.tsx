@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   Ambulance,
   ArrowLeft,
+  ArrowLeftRight,
   Building2,
   Calendar,
   CheckCircle2,
@@ -26,6 +27,8 @@ import {
 import {
   computeShiftCounts,
   getPatientOutcome,
+  hasDistinctDischargeDoctor,
+  hasDistinctDischargeNurse,
   hasReadmission,
   hasRegisteredExit,
   type MessageType,
@@ -47,6 +50,7 @@ interface PatientListProps {
   editingPatientId: string | null;
   canDelete: boolean;
   onEdit: (patient: PatientRecord) => void;
+  onOpenModifyMovement: (patient: PatientRecord) => void;
   onOpenDischarge: (patient: PatientRecord) => void;
   onOpenHospitalization: (patient: PatientRecord) => void;
   onOpenTransfer: (patient: PatientRecord) => void;
@@ -138,6 +142,7 @@ export function PatientList({
   editingPatientId,
   canDelete,
   onEdit,
+  onOpenModifyMovement,
   onOpenDischarge,
   onOpenHospitalization,
   onOpenTransfer,
@@ -188,6 +193,8 @@ export function PatientList({
           patient.observacionesSalida,
           patient.medico,
           patient.enfermera,
+          patient.medicoSalida,
+          patient.enfermeraSalida,
           patient.diagnostico,
           patient.fechaRegistro,
           formatIsoDateEs(patient.fechaRegistro),
@@ -408,6 +415,9 @@ export function PatientList({
             const formattedSecondEntry = formatTime12h(patient.horaSegundaEntrada);
             const formattedSecondExit = formatTime12h(patient.horaSegundaSalida);
 
+            const distinctDoctor = hasDistinctDischargeDoctor(patient);
+            const distinctNurse = hasDistinctDischargeNurse(patient);
+
             const hasDetailFields = Boolean(
               dischargeTypeLabel ||
                 formattedExitDate ||
@@ -416,6 +426,8 @@ export function PatientList({
                 patient.observaciones.trim() ||
                 patient.medico.trim() ||
                 patient.enfermera.trim() ||
+                patient.medicoSalida.trim() ||
+                patient.enfermeraSalida.trim() ||
                 patient.diagnostico.trim() ||
                 patient.observacionesSalida.trim()
             );
@@ -561,26 +573,72 @@ export function PatientList({
                       </div>
                     )}
 
-                    {patient.medico.trim() && (
-                      <div>
-                        <dt className="text-xs font-semibold text-slate-500">
-                          {FIELD_LABELS.medico}
-                        </dt>
-                        <dd className="mt-0.5 font-semibold text-slate-900 break-words">
-                          {patient.medico.trim()}
-                        </dd>
-                      </div>
+                    {distinctDoctor ? (
+                      <>
+                        {patient.medico.trim() && (
+                          <div>
+                            <dt className="text-xs font-semibold text-slate-500">
+                              {FIELD_LABELS.medicoIngreso}
+                            </dt>
+                            <dd className="mt-0.5 font-semibold text-slate-900 break-words">
+                              {patient.medico.trim()}
+                            </dd>
+                          </div>
+                        )}
+                        <div>
+                          <dt className="text-xs font-semibold text-indigo-700">
+                            {FIELD_LABELS.medicoSalida}
+                          </dt>
+                          <dd className="mt-0.5 font-semibold text-indigo-950 break-words">
+                            {patient.medicoSalida.trim()}
+                          </dd>
+                        </div>
+                      </>
+                    ) : (
+                      patient.medico.trim() && (
+                        <div>
+                          <dt className="text-xs font-semibold text-slate-500">
+                            {FIELD_LABELS.medico}
+                          </dt>
+                          <dd className="mt-0.5 font-semibold text-slate-900 break-words">
+                            {patient.medico.trim()}
+                          </dd>
+                        </div>
+                      )
                     )}
 
-                    {patient.enfermera.trim() && (
-                      <div>
-                        <dt className="text-xs font-semibold text-slate-500">
-                          {FIELD_LABELS.enfermera}
-                        </dt>
-                        <dd className="mt-0.5 font-semibold text-slate-900 break-words">
-                          {patient.enfermera.trim()}
-                        </dd>
-                      </div>
+                    {distinctNurse ? (
+                      <>
+                        {patient.enfermera.trim() && (
+                          <div>
+                            <dt className="text-xs font-semibold text-slate-500">
+                              {FIELD_LABELS.enfermeraIngreso}
+                            </dt>
+                            <dd className="mt-0.5 font-semibold text-slate-900 break-words">
+                              {patient.enfermera.trim()}
+                            </dd>
+                          </div>
+                        )}
+                        <div>
+                          <dt className="text-xs font-semibold text-indigo-700">
+                            {FIELD_LABELS.enfermeraSalida}
+                          </dt>
+                          <dd className="mt-0.5 font-semibold text-indigo-950 break-words">
+                            {patient.enfermeraSalida.trim()}
+                          </dd>
+                        </div>
+                      </>
+                    ) : (
+                      patient.enfermera.trim() && (
+                        <div>
+                          <dt className="text-xs font-semibold text-slate-500">
+                            {FIELD_LABELS.enfermera}
+                          </dt>
+                          <dd className="mt-0.5 font-semibold text-slate-900 break-words">
+                            {patient.enfermera.trim()}
+                          </dd>
+                        </div>
+                      )
                     )}
 
                     {patient.diagnostico.trim() && (
@@ -694,6 +752,15 @@ export function PatientList({
                   >
                     <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
                     <span>Editar</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onOpenModifyMovement(patient)}
+                    className="inline-flex min-h-[42px] items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-950 transition-colors hover:bg-amber-100"
+                  >
+                    <ArrowLeftRight className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Modificar registro</span>
                   </button>
 
                   {canDelete && (

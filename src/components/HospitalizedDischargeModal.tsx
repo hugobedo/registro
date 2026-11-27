@@ -7,6 +7,8 @@ import {
 } from '../config/labels';
 import { appendDictatedText, useVoiceDictation } from '../hooks/useVoiceDictation';
 import {
+  hasDistinctDischargeDoctor,
+  hasDistinctDischargeNurse,
   hasReadmission,
   type HospitalizationDischargeType,
   type PatientRecord,
@@ -20,6 +22,12 @@ import {
   normalizeIsoDate,
   normalizeTime24h,
 } from '../utils/time';
+import {
+  detectDoctorTitle,
+  formatDoctorName,
+  formatNurseName,
+  type DoctorTitle,
+} from '../utils/titles';
 import { TimeInput12h } from './TimeInput12h';
 import { VoiceMicButton } from './VoiceMicButton';
 
@@ -34,6 +42,10 @@ interface HospitalizedDischargeModalProps {
       fechaSalida: string;
       horaSalida: string;
       horaSegundaSalida?: string;
+      medico: string;
+      enfermera: string;
+      medicoSalida: string;
+      enfermeraSalida: string;
       observacionesSalida: string;
     },
     openWhatsAppAfter: boolean
@@ -52,6 +64,9 @@ export function HospitalizedDischargeModal({
   onRequestSpellCheck,
 }: HospitalizedDischargeModalProps) {
   const isReadmitted = hasReadmission(patient);
+  const initialHasDistinctStaff =
+    hasDistinctDischargeDoctor(patient) || hasDistinctDischargeNurse(patient);
+
   const [tipoAlta, setTipoAlta] = useState<HospitalizationDischargeType>(
     patient.tipoAltaHospitalizacion || ''
   );
@@ -62,12 +77,40 @@ export function HospitalizedDischargeModal({
     const sourceTime = isReadmitted ? patient.horaSegundaSalida : patient.horaSalida;
     return sourceTime.trim() ? normalizeTime24h(sourceTime) : getCurrentTime24h();
   });
+
+  // Responsables de la salida: por defecto se conservan los mismos del ingreso
+  const [sameStaffAsAdmission, setSameStaffAsAdmission] = useState<boolean>(
+    !initialHasDistinctStaff
+  );
+  const [admissionDoctorTitle, setAdmissionDoctorTitle] = useState<DoctorTitle>(() =>
+    detectDoctorTitle(patient.medico, 'DR.')
+  );
+  const [admissionMedico, setAdmissionMedico] = useState<string>(patient.medico || '');
+  const [admissionEnfermera, setAdmissionEnfermera] = useState<string>(patient.enfermera || '');
+
+  const [dischargeDoctorTitle, setDischargeDoctorTitle] = useState<DoctorTitle>(() =>
+    detectDoctorTitle(patient.medicoSalida || patient.medico, 'DR.')
+  );
+  const [medicoSalida, setMedicoSalida] = useState<string>(
+    patient.medicoSalida || ''
+  );
+  const [enfermeraSalida, setEnfermeraSalida] = useState<string>(
+    patient.enfermeraSalida || ''
+  );
+
   const [observacionesSalida, setObservacionesSalida] = useState<string>(
     patient.observacionesSalida || ''
   );
   const [error, setError] = useState<string | null>(null);
 
   const voice = useVoiceDictation();
+
+  const hasSavedAdmissionDoctor = patient.medico.trim().length > 0;
+  const hasSavedAdmissionNurse = patient.enfermera.trim().length > 0;
+  const formattedAdmissionMedicoPreview = formatDoctorName(admissionMedico, admissionDoctorTitle);
+  const formattedAdmissionEnfermeraPreview = formatNurseName(admissionEnfermera);
+  const formattedDischargeMedicoPreview = formatDoctorName(medicoSalida, dischargeDoctorTitle);
+  const formattedDischargeEnfermeraPreview = formatNurseName(enfermeraSalida);
 
   const handleSubmit = async (openWhatsAppAfter: boolean) => {
     voice.stopDictation();
@@ -80,6 +123,34 @@ export function HospitalizedDischargeModal({
     const normalizedDate = normalizeIsoDate(fechaSalida) || getTodayIsoDate();
     const normalizedExit = normalizeTime24h(horaSalida);
 
+    const finalAdmissionMedico = hasSavedAdmissionDoctor
+      ? patient.medico.trim()
+      : formatDoctorName(admissionMedico, admissionDoctorTitle);
+    const finalAdmissionEnfermera = hasSavedAdmissionNurse
+      ? patient.enfermera.trim()
+      : formatNurseName(admissionEnfermera);
+
+    let finalMedicoSalida = '';
+    let finalEnfermeraSalida = '';
+
+    if (!sameStaffAsAdmission) {
+      const candidateMedicoSalida = formatDoctorName(medicoSalida, dischargeDoctorTitle);
+      const candidateEnfermeraSalida = formatNurseName(enfermeraSalida);
+
+      if (
+        candidateMedicoSalida &&
+        candidateMedicoSalida.toLowerCase() !== finalAdmissionMedico.toLowerCase()
+      ) {
+        finalMedicoSalida = candidateMedicoSalida;
+      }
+      if (
+        candidateEnfermeraSalida &&
+        candidateEnfermeraSalida.toLowerCase() !== finalAdmissionEnfermera.toLowerCase()
+      ) {
+        finalEnfermeraSalida = candidateEnfermeraSalida;
+      }
+    }
+
     await onSaveHospitalizedDischarge(
       patient,
       {
@@ -87,6 +158,10 @@ export function HospitalizedDischargeModal({
         fechaSalida: normalizedDate,
         horaSalida: isReadmitted ? patient.horaSalida : normalizedExit,
         ...(isReadmitted ? { horaSegundaSalida: normalizedExit } : {}),
+        medico: finalAdmissionMedico,
+        enfermera: finalAdmissionEnfermera,
+        medicoSalida: finalMedicoSalida,
+        enfermeraSalida: finalEnfermeraSalida,
         observacionesSalida,
       },
       openWhatsAppAfter
@@ -94,9 +169,41 @@ export function HospitalizedDischargeModal({
   };
 
   const handleSpellCheck = () => {
-    onRequestSpellCheck({ observacionesSalida }, (corrected) => {
+    const fieldsToCheck: Partial<Record<ReviewableFieldKey, string>> = {
+      observacionesSalida,
+    };
+
+    if (sameStaffAsAdmission) {
+      if (!hasSavedAdmissionDoctor && admissionMedico.trim()) {
+        fieldsToCheck.medico = formattedAdmissionMedicoPreview || admissionMedico;
+      }
+      if (!hasSavedAdmissionNurse && admissionEnfermera.trim()) {
+        fieldsToCheck.enfermera = formattedAdmissionEnfermeraPreview || admissionEnfermera;
+      }
+    } else {
+      if (medicoSalida.trim()) {
+        fieldsToCheck.medicoSalida = formattedDischargeMedicoPreview || medicoSalida;
+      }
+      if (enfermeraSalida.trim()) {
+        fieldsToCheck.enfermeraSalida = formattedDischargeEnfermeraPreview || enfermeraSalida;
+      }
+    }
+
+    onRequestSpellCheck(fieldsToCheck, (corrected) => {
       if (typeof corrected.observacionesSalida === 'string') {
         setObservacionesSalida(corrected.observacionesSalida);
+      }
+      if (typeof corrected.medico === 'string') {
+        setAdmissionMedico(corrected.medico);
+      }
+      if (typeof corrected.enfermera === 'string') {
+        setAdmissionEnfermera(corrected.enfermera);
+      }
+      if (typeof corrected.medicoSalida === 'string') {
+        setMedicoSalida(corrected.medicoSalida);
+      }
+      if (typeof corrected.enfermeraSalida === 'string') {
+        setEnfermeraSalida(corrected.enfermeraSalida);
       }
     });
   };
@@ -294,6 +401,308 @@ export function HospitalizedDischargeModal({
             />
           </div>
 
+          {/* Responsables de la salida (médico y enfermera) */}
+          <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3.5">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <span className="text-sm font-semibold text-slate-800">
+                Responsables de la salida
+              </span>
+              <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-semibold text-indigo-950">
+                <input
+                  id="hosp-discharge-same-staff"
+                  type="checkbox"
+                  checked={sameStaffAsAdmission}
+                  onChange={(e) => setSameStaffAsAdmission(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-indigo-700 focus:ring-indigo-600"
+                />
+                <span>Mismos responsables del ingreso</span>
+              </label>
+            </div>
+
+            {sameStaffAsAdmission ? (
+              <div className="space-y-3">
+                {(hasSavedAdmissionDoctor || hasSavedAdmissionNurse) && (
+                  <div className="grid grid-cols-1 gap-2 rounded-lg border border-slate-200 bg-white p-3 text-xs sm:grid-cols-2">
+                    <div>
+                      <span className="font-semibold text-slate-500">{FIELD_LABELS.medico}:</span>
+                      <div className="mt-0.5 font-semibold text-slate-900">
+                        {patient.medico.trim() || 'Sin capturar en ingreso'}
+                      </div>
+                    </div>
+                    <div>
+                      <span className="font-semibold text-slate-500">
+                        {FIELD_LABELS.enfermera}:
+                      </span>
+                      <div className="mt-0.5 font-semibold text-slate-900">
+                        {patient.enfermera.trim() || 'Sin capturar en ingreso'}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {!hasSavedAdmissionDoctor && (
+                  <div>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label
+                        htmlFor="hosp-discharge-admission-medico"
+                        className="block text-xs font-semibold text-slate-700"
+                      >
+                        {FIELD_LABELS.medico}
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <div
+                          role="radiogroup"
+                          aria-label="Seleccionar título DR. o DRA."
+                          className="inline-grid grid-cols-2 gap-0.5 rounded-lg border border-slate-200 bg-white p-0.5"
+                        >
+                          {(['DR.', 'DRA.'] as const).map((t) => (
+                            <button
+                              key={t}
+                              type="button"
+                              role="radio"
+                              aria-checked={admissionDoctorTitle === t}
+                              onClick={() => {
+                                setAdmissionDoctorTitle(t);
+                                if (admissionMedico.trim()) {
+                                  setAdmissionMedico(formatDoctorName(admissionMedico, t));
+                                }
+                              }}
+                              className={`min-h-[30px] rounded-md px-2.5 text-xs font-bold transition-colors ${
+                                admissionDoctorTitle === t
+                                  ? 'bg-indigo-700 text-white'
+                                  : 'text-slate-700 hover:text-slate-950'
+                              }`}
+                            >
+                              {t}
+                            </button>
+                          ))}
+                        </div>
+                        <VoiceMicButton
+                          fieldLabel="Médico responsable"
+                          isActive={voice.activeFieldId === 'hosp_discharge_admission_medico'}
+                          isSupported={voice.isSupported}
+                          onClick={() =>
+                            voice.toggleDictation('hosp_discharge_admission_medico', (transcript) =>
+                              setAdmissionMedico((prev) => appendDictatedText(prev, transcript))
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
+                    <input
+                      id="hosp-discharge-admission-medico"
+                      type="text"
+                      value={admissionMedico}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setAdmissionDoctorTitle(detectDoctorTitle(next, admissionDoctorTitle));
+                        setAdmissionMedico(next);
+                      }}
+                      onBlur={() => {
+                        if (admissionMedico.trim()) {
+                          setAdmissionMedico(
+                            formatDoctorName(admissionMedico, admissionDoctorTitle)
+                          );
+                        }
+                      }}
+                      placeholder="Nombre del médico responsable (se agrega DR. o DRA.)"
+                      autoComplete="off"
+                      className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-700"
+                    />
+                    {formattedAdmissionMedicoPreview && (
+                      <p className="mt-1 text-xs font-semibold text-indigo-800">
+                        Formato automático: {formattedAdmissionMedicoPreview}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {!hasSavedAdmissionNurse && (
+                  <div>
+                    <div className="flex items-center justify-between gap-2">
+                      <label
+                        htmlFor="hosp-discharge-admission-enfermera"
+                        className="block text-xs font-semibold text-slate-700"
+                      >
+                        {FIELD_LABELS.enfermera}
+                      </label>
+                      <VoiceMicButton
+                        fieldLabel="Enfermera responsable"
+                        isActive={voice.activeFieldId === 'hosp_discharge_admission_enfermera'}
+                        isSupported={voice.isSupported}
+                        onClick={() =>
+                          voice.toggleDictation('hosp_discharge_admission_enfermera', (transcript) =>
+                            setAdmissionEnfermera((prev) => appendDictatedText(prev, transcript))
+                          )
+                        }
+                      />
+                    </div>
+                    <input
+                      id="hosp-discharge-admission-enfermera"
+                      type="text"
+                      value={admissionEnfermera}
+                      onChange={(e) => setAdmissionEnfermera(e.target.value)}
+                      onBlur={() => {
+                        if (admissionEnfermera.trim()) {
+                          setAdmissionEnfermera(formatNurseName(admissionEnfermera));
+                        }
+                      }}
+                      placeholder="Nombre de la enfermera responsable (se agrega ENF.)"
+                      autoComplete="off"
+                      className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-700"
+                    />
+                    {formattedAdmissionEnfermeraPreview && (
+                      <p className="mt-1 text-xs font-semibold text-indigo-800">
+                        Formato automático: {formattedAdmissionEnfermeraPreview}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                <p className="text-xs text-slate-500">
+                  Se conservarán los mismos responsables de la entrada. Desmarca la casilla si
+                  fueron diferentes al dar la salida.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {(hasSavedAdmissionDoctor || hasSavedAdmissionNurse) && (
+                  <div className="rounded-lg border border-indigo-200/80 bg-indigo-50/60 px-3 py-2 text-xs text-indigo-950">
+                    <strong>Ingreso conservado:</strong>{' '}
+                    {[
+                      patient.medico.trim() ? `${FIELD_LABELS.medicoIngreso}: ${patient.medico.trim()}` : '',
+                      patient.enfermera.trim()
+                        ? `${FIELD_LABELS.enfermeraIngreso}: ${patient.enfermera.trim()}`
+                        : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </div>
+                )}
+
+                {/* Médico responsable de la salida */}
+                <div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <label
+                      htmlFor="hosp-discharge-medico-salida"
+                      className="block text-xs font-semibold text-slate-700"
+                    >
+                      {FIELD_LABELS.medicoSalida}
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <div
+                        role="radiogroup"
+                        aria-label="Seleccionar título DR. o DRA. del médico de salida"
+                        className="inline-grid grid-cols-2 gap-0.5 rounded-lg border border-slate-200 bg-white p-0.5"
+                      >
+                        {(['DR.', 'DRA.'] as const).map((t) => (
+                          <button
+                            key={t}
+                            type="button"
+                            role="radio"
+                            aria-checked={dischargeDoctorTitle === t}
+                            onClick={() => {
+                              setDischargeDoctorTitle(t);
+                              if (medicoSalida.trim()) {
+                                setMedicoSalida(formatDoctorName(medicoSalida, t));
+                              }
+                            }}
+                            className={`min-h-[30px] rounded-md px-2.5 text-xs font-bold transition-colors ${
+                              dischargeDoctorTitle === t
+                                ? 'bg-indigo-700 text-white'
+                                : 'text-slate-700 hover:text-slate-950'
+                            }`}
+                          >
+                            {t}
+                          </button>
+                        ))}
+                      </div>
+                      <VoiceMicButton
+                        fieldLabel="Médico de salida"
+                        isActive={voice.activeFieldId === 'hosp_discharge_medico_salida'}
+                        isSupported={voice.isSupported}
+                        onClick={() =>
+                          voice.toggleDictation('hosp_discharge_medico_salida', (transcript) =>
+                            setMedicoSalida((prev) => appendDictatedText(prev, transcript))
+                          )
+                        }
+                      />
+                    </div>
+                  </div>
+                  <input
+                    id="hosp-discharge-medico-salida"
+                    type="text"
+                    value={medicoSalida}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setDischargeDoctorTitle(detectDoctorTitle(next, dischargeDoctorTitle));
+                      setMedicoSalida(next);
+                    }}
+                    onBlur={() => {
+                      if (medicoSalida.trim()) {
+                        setMedicoSalida(formatDoctorName(medicoSalida, dischargeDoctorTitle));
+                      }
+                    }}
+                    placeholder="Nombre del doctor responsable de la salida (DR. / DRA.)"
+                    autoComplete="off"
+                    className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-700"
+                  />
+                  {formattedDischargeMedicoPreview && (
+                    <p className="mt-1 text-xs font-semibold text-indigo-800">
+                      Formato automático: {formattedDischargeMedicoPreview}
+                    </p>
+                  )}
+                </div>
+
+                {/* Enfermera responsable de la salida */}
+                <div>
+                  <div className="flex items-center justify-between gap-2">
+                    <label
+                      htmlFor="hosp-discharge-enfermera-salida"
+                      className="block text-xs font-semibold text-slate-700"
+                    >
+                      {FIELD_LABELS.enfermeraSalida}
+                    </label>
+                    <VoiceMicButton
+                      fieldLabel="Enfermera de salida"
+                      isActive={voice.activeFieldId === 'hosp_discharge_enfermera_salida'}
+                      isSupported={voice.isSupported}
+                      onClick={() =>
+                        voice.toggleDictation('hosp_discharge_enfermera_salida', (transcript) =>
+                          setEnfermeraSalida((prev) => appendDictatedText(prev, transcript))
+                        )
+                      }
+                    />
+                  </div>
+                  <input
+                    id="hosp-discharge-enfermera-salida"
+                    type="text"
+                    value={enfermeraSalida}
+                    onChange={(e) => setEnfermeraSalida(e.target.value)}
+                    onBlur={() => {
+                      if (enfermeraSalida.trim()) {
+                        setEnfermeraSalida(formatNurseName(enfermeraSalida));
+                      }
+                    }}
+                    placeholder="Nombre de la enfermera responsable de la salida (ENF.)"
+                    autoComplete="off"
+                    className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-700"
+                  />
+                  {formattedDischargeEnfermeraPreview && (
+                    <p className="mt-1 text-xs font-semibold text-indigo-800">
+                      Formato automático: {formattedDischargeEnfermeraPreview}
+                    </p>
+                  )}
+                </div>
+
+                <p className="text-xs text-slate-500">
+                  Cuando el nombre de salida sea distinto al de ingreso, se mostrarán ambas etapas
+                  en el historial y en los reportes.
+                </p>
+              </div>
+            )}
+          </div>
+
           {/* Observaciones */}
           <div>
             <div className="flex items-center justify-between gap-2">
@@ -324,7 +733,8 @@ export function HospitalizedDischargeModal({
             />
             <p className="mt-1 text-xs text-slate-500">
               Al guardar, el paciente saldrá del conteo de Hospitalización y se sumará a Atendidos,
-              conservando su tipo de alta, fecha de salida y observaciones en el historial.
+              conservando su tipo de alta, fecha de salida, responsables y observaciones en el
+              historial.
             </p>
           </div>
 

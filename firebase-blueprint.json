@@ -170,6 +170,14 @@
           "type": "string",
           "maxLength": 200
         },
+        "medicoSalida": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "enfermeraSalida": {
+          "type": "string",
+          "maxLength": 200
+        },
         "diagnostico": {
           "type": "string",
           "maxLength": 1500

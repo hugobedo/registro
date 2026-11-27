@@ -18,6 +18,7 @@ import { Header, type ActiveWorkspaceView } from './components/Header';
 import { HistoryAndSecurityPanel } from './components/HistoryAndSecurityPanel';
 import { HospitalizationModal } from './components/HospitalizationModal';
 import { HospitalizedDischargeModal } from './components/HospitalizedDischargeModal';
+import { ModifyMovementModal } from './components/ModifyMovementModal';
 import { PatientForm } from './components/PatientForm';
 import { PatientList, type OutcomeFilter } from './components/PatientList';
 import { ReadmissionModal } from './components/ReadmissionModal';
@@ -35,6 +36,7 @@ import { auth, googleProvider } from './firebase';
 import {
   ConcurrencyConflictError,
   approveAccessRequest,
+  correctPatientMovementInCloud,
   createPatientInCloud,
   deleteAllPatientsInCloud,
   deleteSinglePatientInCloud,
@@ -69,6 +71,7 @@ import {
   type HospitalizationDischargeType,
   type MessageType,
   type PatientFormValues,
+  type PatientOutcome,
   type PatientRecord,
   type ReviewableFieldKey,
   type ShiftConfigRecord,
@@ -137,6 +140,7 @@ export default function App() {
   const [hospitalizationPatientId, setHospitalizationPatientId] = useState<string | null>(null);
   const [transferPatientId, setTransferPatientId] = useState<string | null>(null);
   const [readmissionPatientId, setReadmissionPatientId] = useState<string | null>(null);
+  const [modifyMovementPatientId, setModifyMovementPatientId] = useState<string | null>(null);
   const [whatsAppSession, setWhatsAppSession] = useState<WhatsAppSession | null>(null);
   const [spellCheckSession, setSpellCheckSession] = useState<SpellCheckSession | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<
@@ -435,6 +439,11 @@ export default function App() {
     [patients, readmissionPatientId]
   );
 
+  const modifyMovementPatient = useMemo(
+    () => patients.find((p) => p.id === modifyMovementPatientId) ?? null,
+    [patients, modifyMovementPatientId]
+  );
+
   const whatsAppPatient = useMemo(
     () =>
       whatsAppSession
@@ -597,6 +606,10 @@ export default function App() {
       fechaSalida: string;
       horaSalida: string;
       horaSegundaSalida?: string;
+      medico: string;
+      enfermera: string;
+      medicoSalida: string;
+      enfermeraSalida: string;
       observacionesSalida: string;
     },
     openWhatsAppAfter: boolean
@@ -617,8 +630,10 @@ export default function App() {
           estadoEgreso: 'atendido',
           tipoAltaHospitalizacion: updates.tipoAltaHospitalizacion,
           destinoTraslado: '',
-          medico: targetPatient.medico,
-          enfermera: targetPatient.enfermera,
+          medico: updates.medico,
+          enfermera: updates.enfermera,
+          medicoSalida: updates.medicoSalida,
+          enfermeraSalida: updates.enfermeraSalida,
           diagnostico: targetPatient.diagnostico,
           observacionesSalida: updates.observacionesSalida,
         },
@@ -724,6 +739,50 @@ export default function App() {
     }
   };
 
+  const handleSaveModifyMovement = async (
+    targetPatient: PatientRecord,
+    updates: {
+      estadoEgreso: PatientOutcome;
+      horaSalida: string;
+      fechaSalida: string;
+      tipoAltaHospitalizacion: HospitalizationDischargeType;
+      destinoTraslado: string;
+      removeReadmission: boolean;
+      fechaSegundaEntrada: string;
+      horaSegundaEntrada: string;
+      horaSegundaSalida: string;
+      medico: string;
+      enfermera: string;
+      medicoSalida: string;
+      enfermeraSalida: string;
+      diagnostico: string;
+      observacionesSalida: string;
+    }
+  ) => {
+    if (!firebaseUser) return;
+    setIsSavingRecord(true);
+    setConflictNotice(null);
+
+    try {
+      await correctPatientMovementInCloud(targetPatient, updates, firebaseUser);
+      setModifyMovementPatientId(null);
+      showToast(
+        updates.removeReadmission
+          ? 'Registro corregido y reingreso erróneo eliminado.'
+          : 'Movimiento del registro corregido y sincronizado.'
+      );
+    } catch (error) {
+      if (error instanceof ConcurrencyConflictError) {
+        setConflictNotice(error.message);
+        setModifyMovementPatientId(null);
+      } else {
+        throw error;
+      }
+    } finally {
+      setIsSavingRecord(false);
+    }
+  };
+
   const handleRequestDeletePatient = (patient: PatientRecord) => {
     if (!firebaseUser || !isAdmin) return;
     setDeleteTarget({ mode: 'single', patient });
@@ -813,6 +872,9 @@ export default function App() {
       if (readmissionPatientId === target.id) {
         setReadmissionPatientId(null);
       }
+      if (modifyMovementPatientId === target.id) {
+        setModifyMovementPatientId(null);
+      }
       if (whatsAppSession?.patientId === target.id) {
         setWhatsAppSession(null);
       }
@@ -828,6 +890,7 @@ export default function App() {
     setHospitalizationPatientId(null);
     setTransferPatientId(null);
     setReadmissionPatientId(null);
+    setModifyMovementPatientId(null);
     setWhatsAppSession(null);
     setDeleteTarget(null);
     setSelectedCategory('todos');
@@ -1241,6 +1304,7 @@ export default function App() {
                 setActiveView('entrada');
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
+              onOpenModifyMovement={(patient) => setModifyMovementPatientId(patient.id)}
               onOpenDischarge={(patient) => {
                 const outcome = getPatientOutcome(patient);
                 if (
@@ -1415,6 +1479,16 @@ export default function App() {
           isSaving={isSavingRecord}
           onClose={() => setReadmissionPatientId(null)}
           onSaveReadmission={handleSaveReadmission}
+        />
+      )}
+
+      {modifyMovementPatient && (
+        <ModifyMovementModal
+          patient={modifyMovementPatient}
+          isSaving={isSavingRecord}
+          onClose={() => setModifyMovementPatientId(null)}
+          onSaveMovement={handleSaveModifyMovement}
+          onRequestSpellCheck={handleRequestSpellCheck}
         />
       )}
 

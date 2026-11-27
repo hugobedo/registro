@@ -240,7 +240,13 @@ const PROTECTED_UPPERCASE_TOKENS = new Set([
  * Campos de nombres propios donde NO se reemplazan palabras por diccionario
  * para evitar alterar apellidos, nombres o títulos por suposición.
  */
-const PROPER_NAME_FIELDS = new Set<ReviewableFieldKey>(['nombre', 'medico', 'enfermera']);
+const PROPER_NAME_FIELDS = new Set<ReviewableFieldKey>([
+  'nombre',
+  'medico',
+  'enfermera',
+  'medicoSalida',
+  'enfermeraSalida',
+]);
 
 function applyCasePattern(source: string, replacement: string): string {
   if (source === source.toUpperCase() && source.length > 1) {
@@ -401,6 +407,8 @@ export function reviewMultipleFields(
     'destinoTraslado',
     'medico',
     'enfermera',
+    'medicoSalida',
+    'enfermeraSalida',
     'diagnostico',
   ];
 
@@ -435,6 +443,10 @@ export function reviewMessageDraft(draftText: string): {
     'Paciente:',
     `${FIELD_LABELS.medico}:`,
     `${FIELD_LABELS.enfermera}:`,
+    `${FIELD_LABELS.medicoIngreso}:`,
+    `${FIELD_LABELS.medicoSalida}:`,
+    `${FIELD_LABELS.enfermeraIngreso}:`,
+    `${FIELD_LABELS.enfermeraSalida}:`,
   ];
 
   const fixedLines = lines.map((line) => {

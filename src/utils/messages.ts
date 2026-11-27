@@ -9,6 +9,8 @@ import {
 import {
   computeShiftCounts,
   getPatientOutcome,
+  hasDistinctDischargeDoctor,
+  hasDistinctDischargeNurse,
   hasReadmission,
   type MessageType,
   type PatientRecord,
@@ -102,6 +104,23 @@ export function buildSalidaMessage(
         { label: FIELD_LABELS.horaSalida, value: formatTime12h(patient.horaSalida) },
       ];
 
+  const distinctDoctor = hasDistinctDischargeDoctor(patient);
+  const distinctNurse = hasDistinctDischargeNurse(patient);
+  const staffLines: MessageFieldLine[] = [
+    ...(distinctDoctor
+      ? [
+          { label: FIELD_LABELS.medicoIngreso, value: patient.medico },
+          { label: FIELD_LABELS.medicoSalida, value: patient.medicoSalida },
+        ]
+      : [{ label: FIELD_LABELS.medico, value: patient.medico }]),
+    ...(distinctNurse
+      ? [
+          { label: FIELD_LABELS.enfermeraIngreso, value: patient.enfermera },
+          { label: FIELD_LABELS.enfermeraSalida, value: patient.enfermeraSalida },
+        ]
+      : [{ label: FIELD_LABELS.enfermera, value: patient.enfermera }]),
+  ];
+
   const lines: MessageFieldLine[] = [
     ...timeLines,
     { label: 'Fecha', value: formatIsoDateEs(patient.fechaRegistro) },
@@ -114,8 +133,7 @@ export function buildSalidaMessage(
     { label: FIELD_LABELS.procedencia, value: patient.procedencia },
     { label: FIELD_LABELS.motivoVisita, value: patient.motivoVisita },
     { label: FIELD_LABELS.observaciones, value: patient.observacionesSalida || '' },
-    { label: FIELD_LABELS.medico, value: patient.medico },
-    { label: FIELD_LABELS.enfermera, value: patient.enfermera },
+    ...staffLines,
     { label: FIELD_LABELS.diagnostico, value: patient.diagnostico },
   ];
 
@@ -220,10 +238,20 @@ export function buildShiftReportWhatsAppMessage(
       if (patient.observacionesSalida.trim()) {
         detailParts.push(`Obs. salida: ${patient.observacionesSalida.trim()}`);
       }
-      if (patient.medico.trim()) {
+      if (hasDistinctDischargeDoctor(patient)) {
+        if (patient.medico.trim()) {
+          detailParts.push(`${FIELD_LABELS.medicoIngreso}: ${patient.medico.trim()}`);
+        }
+        detailParts.push(`${FIELD_LABELS.medicoSalida}: ${patient.medicoSalida.trim()}`);
+      } else if (patient.medico.trim()) {
         detailParts.push(`${FIELD_LABELS.medico}: ${patient.medico.trim()}`);
       }
-      if (patient.enfermera.trim()) {
+      if (hasDistinctDischargeNurse(patient)) {
+        if (patient.enfermera.trim()) {
+          detailParts.push(`${FIELD_LABELS.enfermeraIngreso}: ${patient.enfermera.trim()}`);
+        }
+        detailParts.push(`${FIELD_LABELS.enfermeraSalida}: ${patient.enfermeraSalida.trim()}`);
+      } else if (patient.enfermera.trim()) {
         detailParts.push(`${FIELD_LABELS.enfermera}: ${patient.enfermera.trim()}`);
       }
       if (patient.diagnostico.trim()) {

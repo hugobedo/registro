@@ -205,6 +205,7 @@
       hospitalizationModal: null,
       transferModal: null,
       readmissionModal: null,
+      modifyMovementModal: null,
       whatsappModal: null,
       reportModalOpen: false,
       clearModal: null,
@@ -390,6 +391,18 @@
       return Boolean((p?.horaSegundaEntrada || '').trim() || (typeof p?.reingresosCount === 'number' && p.reingresosCount > 0));
     }
 
+    function hasDistinctDischargeDoctor(p) {
+      const outDoc = (p?.medicoSalida || '').trim();
+      if (!outDoc) return false;
+      return outDoc.toLowerCase() !== (p?.medico || '').trim().toLowerCase();
+    }
+
+    function hasDistinctDischargeNurse(p) {
+      const outNurse = (p?.enfermeraSalida || '').trim();
+      if (!outNurse) return false;
+      return outNurse.toLowerCase() !== (p?.enfermera || '').trim().toLowerCase();
+    }
+
     function hasActiveReadmission(p) {
       return p?.estadoEgreso === 'en_atencion' && Boolean((p?.horaSegundaEntrada || '').trim()) && !(p?.horaSegundaSalida || '').trim();
     }
@@ -550,7 +563,7 @@
         } else {
           next = next.replace(/\banos\b/gi, 'años');
         }
-      } else if (['nombre', 'procedencia', 'medico', 'enfermera'].includes(field)) {
+      } else if (['nombre', 'procedencia', 'medico', 'enfermera', 'medicoSalida', 'enfermeraSalida'].includes(field)) {
         const titled = titleCaseEs(next);
         if (titled !== next) {
           next = titled;
@@ -687,8 +700,18 @@
         add('Destino del traslado', p.destinoTraslado);
       } else {
         add('Observaciones', p.observacionesSalida);
-        add('Médico que lo atendió', p.medico);
-        add('Enfermera que lo atendió', p.enfermera);
+        if (hasDistinctDischargeDoctor(p)) {
+          add('Médico de ingreso', p.medico);
+          add('Médico de salida', p.medicoSalida);
+        } else {
+          add('Médico que lo atendió', p.medico);
+        }
+        if (hasDistinctDischargeNurse(p)) {
+          add('Enfermera de ingreso', p.enfermera);
+          add('Enfermera de salida', p.enfermeraSalida);
+        } else {
+          add('Enfermera que lo atendió', p.enfermera);
+        }
         add('Diagnóstico', p.diagnostico);
       }
       return lines.join('\n');
@@ -746,8 +769,18 @@
           if ((p.destinoTraslado || '').trim()) parts.push(`Destino del traslado: ${p.destinoTraslado.trim()}`);
           if ((p.observaciones || '').trim()) parts.push(`Obs. ingreso: ${p.observaciones.trim()}`);
           if ((p.observacionesSalida || '').trim()) parts.push(`Obs. salida: ${p.observacionesSalida.trim()}`);
-          if ((p.medico || '').trim()) parts.push(`Médico que lo atendió: ${p.medico.trim()}`);
-          if ((p.enfermera || '').trim()) parts.push(`Enfermera que lo atendió: ${p.enfermera.trim()}`);
+          if (hasDistinctDischargeDoctor(p)) {
+            if ((p.medico || '').trim()) parts.push(`Médico de ingreso: ${p.medico.trim()}`);
+            parts.push(`Médico de salida: ${p.medicoSalida.trim()}`);
+          } else if ((p.medico || '').trim()) {
+            parts.push(`Médico que lo atendió: ${p.medico.trim()}`);
+          }
+          if (hasDistinctDischargeNurse(p)) {
+            if ((p.enfermera || '').trim()) parts.push(`Enfermera de ingreso: ${p.enfermera.trim()}`);
+            parts.push(`Enfermera de salida: ${p.enfermeraSalida.trim()}`);
+          } else if ((p.enfermera || '').trim()) {
+            parts.push(`Enfermera que lo atendió: ${p.enfermera.trim()}`);
+          }
           if ((p.diagnostico || '').trim()) parts.push(`Diagnóstico: ${p.diagnostico.trim()}`);
           lines.push(parts.join(' | '));
         });
@@ -903,8 +936,18 @@
         if (clinParts.length) detailLines.push(clinParts.join('  |  '));
 
         const staffParts = [];
-        if ((p.medico || '').trim()) staffParts.push(`Médico que lo atendió: ${p.medico.trim()}`);
-        if ((p.enfermera || '').trim()) staffParts.push(`Enfermera que lo atendió: ${p.enfermera.trim()}`);
+        if (hasDistinctDischargeDoctor(p)) {
+          if ((p.medico || '').trim()) staffParts.push(`Médico de ingreso: ${p.medico.trim()}`);
+          staffParts.push(`Médico de salida: ${p.medicoSalida.trim()}`);
+        } else if ((p.medico || '').trim()) {
+          staffParts.push(`Médico que lo atendió: ${p.medico.trim()}`);
+        }
+        if (hasDistinctDischargeNurse(p)) {
+          if ((p.enfermera || '').trim()) staffParts.push(`Enfermera de ingreso: ${p.enfermera.trim()}`);
+          staffParts.push(`Enfermera de salida: ${p.enfermeraSalida.trim()}`);
+        } else if ((p.enfermera || '').trim()) {
+          staffParts.push(`Enfermera que lo atendió: ${p.enfermera.trim()}`);
+        }
         if ((p.diagnostico || '').trim()) staffParts.push(`Diagnóstico: ${p.diagnostico.trim()}`);
         if (staffParts.length) detailLines.push(staffParts.join('  |  '));
 
@@ -1073,6 +1116,8 @@
         observacionesSalida: typeof d.observacionesSalida === 'string' ? d.observacionesSalida : '',
         medico: typeof d.medico === 'string' ? d.medico : '',
         enfermera: typeof d.enfermera === 'string' ? d.enfermera : '',
+        medicoSalida: typeof d.medicoSalida === 'string' ? d.medicoSalida : '',
+        enfermeraSalida: typeof d.enfermeraSalida === 'string' ? d.enfermeraSalida : '',
         diagnostico: typeof d.diagnostico === 'string' ? d.diagnostico : '',
         version: typeof d.version === 'number' && d.version >= 1 ? d.version : 1,
         createdByEmail: typeof d.createdByEmail === 'string' ? d.createdByEmail : '',
@@ -1180,6 +1225,8 @@
           observacionesSalida: clamp(form.observacionesSalida, 1500),
           medico: clamp(form.medico, 200),
           enfermera: clamp(form.enfermera, 200),
+          medicoSalida: '',
+          enfermeraSalida: '',
           diagnostico: clamp(form.diagnostico, 1500)
         });
         await writeAuditLog('create_patient', `Registró ingreso de ${clamp(form.nombre, 120) || 'paciente'}`, 1, id);
@@ -1274,6 +1321,16 @@
       const nextHoraSalida = updates.horaSegundaSalida !== undefined
         ? clamp(existing.horaSalida || '', 10)
         : clamp(updates.horaSalida, 10);
+      const nextMedico = clamp(updates.medico, 200);
+      const nextEnfermera = clamp(updates.enfermera, 200);
+      const rawMedicoSalida = updates.medicoSalida !== undefined
+        ? clamp(updates.medicoSalida, 200)
+        : (updates.estadoEgreso === 'hospitalizado' ? '' : clamp(existing.medicoSalida || '', 200));
+      const rawEnfermeraSalida = updates.enfermeraSalida !== undefined
+        ? clamp(updates.enfermeraSalida, 200)
+        : (updates.estadoEgreso === 'hospitalizado' ? '' : clamp(existing.enfermeraSalida || '', 200));
+      const nextMedicoSalida = rawMedicoSalida && rawMedicoSalida.toLowerCase() !== nextMedico.toLowerCase() ? rawMedicoSalida : '';
+      const nextEnfermeraSalida = rawEnfermeraSalida && rawEnfermeraSalida.toLowerCase() !== nextEnfermera.toLowerCase() ? rawEnfermeraSalida : '';
       try {
         await runTransaction(db, async (tx) => {
           const snap = await tx.get(ref);
@@ -1290,8 +1347,10 @@
             tipoAltaHospitalizacion: nextTipoAlta,
             destinoTraslado: nextDestino,
             observacionesSalida: clamp(updates.observacionesSalida, 1500),
-            medico: clamp(updates.medico, 200),
-            enfermera: clamp(updates.enfermera, 200),
+            medico: nextMedico,
+            enfermera: nextEnfermera,
+            medicoSalida: nextMedicoSalida,
+            enfermeraSalida: nextEnfermeraSalida,
             diagnostico: clamp(updates.diagnostico, 1500),
             updatedAt: serverTimestamp(),
             updatedAtIso: nowIso,
@@ -1352,6 +1411,71 @@
           1,
           existing.id
         );
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith('CONFLICT:')) throw err;
+        handleFirestoreError(err, OperationType.UPDATE, path);
+      }
+    }
+
+    async function correctPatientMovementCloud(existing, updates) {
+      const u = state.user;
+      const path = `patients/${existing.id}`;
+      const ref = doc(db, 'patients', existing.id);
+      const nowIso = new Date().toISOString();
+      const nextOutcome = ['en_atencion', 'atendido', 'no_espero_turno', 'no_atendido', 'trasladado', 'hospitalizado'].includes(updates.estadoEgreso)
+        ? updates.estadoEgreso
+        : 'en_atencion';
+      const nextRemoveReadm = Boolean(updates.removeReadmission);
+      const nextFechaSegundaEntrada = nextRemoveReadm ? '' : normalizeIsoDate(updates.fechaSegundaEntrada);
+      const nextHoraSegundaEntrada = nextRemoveReadm ? '' : clamp(updates.horaSegundaEntrada, 10);
+      const keepingReadm = !nextRemoveReadm && (nextHoraSegundaEntrada.length > 0 || (existing.reingresosCount || 0) > 0);
+      const nextHoraSegundaSalida = (nextRemoveReadm || nextOutcome === 'en_atencion') ? '' : clamp(updates.horaSegundaSalida, 10);
+      const nextReingresosCount = nextRemoveReadm ? 0 : (nextHoraSegundaEntrada ? Math.max(1, existing.reingresosCount || 1) : 0);
+      const nextHoraSalida = (nextOutcome === 'en_atencion' && !keepingReadm) ? '' : clamp(updates.horaSalida, 10);
+      const nextDestinoTraslado = nextOutcome === 'trasladado' ? clamp(updates.destinoTraslado, 200) : '';
+      const nextTipoAlta = nextOutcome === 'atendido' ? parseHospitalizationDischargeType(updates.tipoAltaHospitalizacion) : '';
+      const nextFechaSalida = (nextOutcome === 'atendido' && nextTipoAlta) ? normalizeIsoDate(updates.fechaSalida) : '';
+      const nextMedico = clamp(updates.medico, 200);
+      const nextEnfermera = clamp(updates.enfermera, 200);
+      const rawMedicoSalida = (nextOutcome === 'atendido' && nextTipoAlta) ? clamp(updates.medicoSalida, 200) : '';
+      const rawEnfermeraSalida = (nextOutcome === 'atendido' && nextTipoAlta) ? clamp(updates.enfermeraSalida, 200) : '';
+      const nextMedicoSalida = rawMedicoSalida && rawMedicoSalida.toLowerCase() !== nextMedico.toLowerCase() ? rawMedicoSalida : '';
+      const nextEnfermeraSalida = rawEnfermeraSalida && rawEnfermeraSalida.toLowerCase() !== nextEnfermera.toLowerCase() ? rawEnfermeraSalida : '';
+
+      try {
+        await runTransaction(db, async (tx) => {
+          const snap = await tx.get(ref);
+          if (!snap.exists()) throw new Error('CONFLICT:Este paciente fue eliminado desde otro dispositivo.');
+          const cur = snap.data();
+          if ((cur.version || 1) !== existing.version) {
+            throw new Error('CONFLICT:Otro dispositivo actualizó este paciente mientras realizabas la corrección. Vuelve a abrir el registro.');
+          }
+          tx.update(ref, {
+            estadoEgreso: nextOutcome,
+            horaSalida: nextHoraSalida,
+            fechaSalida: nextFechaSalida,
+            tipoAltaHospitalizacion: nextTipoAlta,
+            destinoTraslado: nextDestinoTraslado,
+            fechaSegundaEntrada: nextFechaSegundaEntrada,
+            horaSegundaEntrada: nextHoraSegundaEntrada,
+            horaSegundaSalida: nextHoraSegundaSalida,
+            reingresosCount: nextReingresosCount,
+            medico: nextMedico,
+            enfermera: nextEnfermera,
+            medicoSalida: nextMedicoSalida,
+            enfermeraSalida: nextEnfermeraSalida,
+            diagnostico: clamp(updates.diagnostico, 1500),
+            observacionesSalida: clamp(updates.observacionesSalida, 1500),
+            updatedAt: serverTimestamp(),
+            updatedAtIso: nowIso,
+            updatedByUid: u.uid,
+            updatedByEmail: clamp(u.email || '', 200),
+            version: existing.version + 1
+          });
+        });
+        const label = existing.nombre || 'paciente';
+        const suffix = nextRemoveReadm ? ' y eliminó reingreso erróneo' : '';
+        await writeAuditLog('update_patient', `Corrigió movimiento de ${label} a ${outcomeLabel(nextOutcome)}${suffix}`, 1, existing.id);
       } catch (err) {
         if (err instanceof Error && err.message.startsWith('CONFLICT:')) throw err;
         handleFirestoreError(err, OperationType.UPDATE, path);
@@ -1480,6 +1604,8 @@
             observacionesSalida: clamp(item.observacionesSalida || '', 1500),
             medico: clamp(item.medico || '', 200),
             enfermera: clamp(item.enfermera || '', 200),
+            medicoSalida: clamp(item.medicoSalida || '', 200),
+            enfermeraSalida: clamp(item.enfermeraSalida || '', 200),
             diagnostico: clamp(item.diagnostico || '', 1500)
           }
         });
@@ -2087,12 +2213,51 @@
     function openHospitalizedDischargeModal(patient) {
       stopVoice();
       const readmitted = hasReadmission(patient);
+      const hasDistinct = hasDistinctDischargeDoctor(patient) || hasDistinctDischargeNurse(patient);
       state.hospitalizedDischargeModal = {
         patientId: patient.id,
         isReadmission: readmitted,
         tipoAltaHospitalizacion: parseHospitalizationDischargeType(patient.tipoAltaHospitalizacion),
         fechaSalida: normalizeIsoDate(patient.fechaSalida) || getTodayIsoDate(),
         horaSalida: readmitted ? (patient.horaSegundaSalida || nowTime24()) : (patient.horaSalida || nowTime24()),
+        sameStaffAsAdmission: !hasDistinct,
+        admissionDoctorTitle: detectDoctorTitle(patient.medico),
+        admissionDoctorName: stripDoctorPrefix(patient.medico),
+        admissionNurseName: stripNursePrefix(patient.enfermera),
+        dischargeDoctorTitle: detectDoctorTitle(patient.medicoSalida || patient.medico),
+        dischargeDoctorName: stripDoctorPrefix(patient.medicoSalida || ''),
+        dischargeNurseName: stripNursePrefix(patient.enfermeraSalida || ''),
+        observacionesSalida: patient.observacionesSalida || '',
+        error: ''
+      };
+      render();
+    }
+
+    function openModifyMovementModal(patient) {
+      stopVoice();
+      const outcome = getOutcome(patient);
+      const readmitted = hasReadmission(patient);
+      const hasDistinct = hasDistinctDischargeDoctor(patient) || hasDistinctDischargeNurse(patient);
+      state.modifyMovementModal = {
+        patientId: patient.id,
+        initialHasReadmission: readmitted,
+        estadoEgreso: outcome,
+        removeReadmission: false,
+        fechaSegundaEntrada: normalizeIsoDate(patient.fechaSegundaEntrada) || getTodayIsoDate(),
+        horaSegundaEntrada: patient.horaSegundaEntrada || '',
+        horaSegundaSalida: patient.horaSegundaSalida || '',
+        horaSalida: patient.horaSalida || '',
+        destinoTraslado: patient.destinoTraslado || '',
+        tipoAltaHospitalizacion: parseHospitalizationDischargeType(patient.tipoAltaHospitalizacion),
+        fechaSalida: normalizeIsoDate(patient.fechaSalida) || getTodayIsoDate(),
+        doctorTitle: detectDoctorTitle(patient.medico),
+        doctorName: stripDoctorPrefix(patient.medico),
+        nurseName: stripNursePrefix(patient.enfermera),
+        sameStaffAsAdmission: !hasDistinct,
+        dischargeDoctorTitle: detectDoctorTitle(patient.medicoSalida || patient.medico),
+        dischargeDoctorName: stripDoctorPrefix(patient.medicoSalida || ''),
+        dischargeNurseName: stripNursePrefix(patient.enfermeraSalida || ''),
+        diagnostico: patient.diagnostico || '',
         observacionesSalida: patient.observacionesSalida || '',
         error: ''
       };
@@ -2285,7 +2450,7 @@
         if (!q) return true;
         const haystack = [
           p.nombre, p.edad, p.procedencia, p.motivoVisita, p.destinoTraslado, p.observaciones,
-          p.observacionesSalida, p.diagnostico, p.medico, p.enfermera,
+          p.observacionesSalida, p.diagnostico, p.medico, p.enfermera, p.medicoSalida, p.enfermeraSalida,
           p.fechaRegistro, formatIsoDateEs(p.fechaRegistro),
           p.fechaSalida, formatIsoDateEs(p.fechaSalida),
           p.fechaSegundaEntrada, formatIsoDateEs(p.fechaSegundaEntrada),
@@ -2402,8 +2567,18 @@
                 if ((p.motivoVisita || '').trim()) details.push(`<div><dt class="inline font-semibold text-slate-900">Motivo de visita:</dt> <dd class="inline">${esc(p.motivoVisita.trim())}</dd></div>`);
                 if ((p.destinoTraslado || '').trim()) details.push(`<div class="sm:col-span-2"><dt class="inline font-semibold text-slate-900">Destino del traslado:</dt> <dd class="inline font-semibold text-blue-900">${esc(p.destinoTraslado.trim())}</dd></div>`);
                 if ((p.observaciones || '').trim()) details.push(`<div><dt class="inline font-semibold text-slate-900">${(p.observacionesSalida || '').trim() ? 'Obs. ingreso:' : 'Observaciones:'}</dt> <dd class="inline">${esc(p.observaciones.trim())}</dd></div>`);
-                if ((p.medico || '').trim()) details.push(`<div><dt class="inline font-semibold text-slate-900">Médico que lo atendió:</dt> <dd class="inline">${esc(p.medico.trim())}</dd></div>`);
-                if ((p.enfermera || '').trim()) details.push(`<div><dt class="inline font-semibold text-slate-900">Enfermera que lo atendió:</dt> <dd class="inline">${esc(p.enfermera.trim())}</dd></div>`);
+                if (hasDistinctDischargeDoctor(p)) {
+                  if ((p.medico || '').trim()) details.push(`<div><dt class="inline font-semibold text-slate-900">Médico de ingreso:</dt> <dd class="inline">${esc(p.medico.trim())}</dd></div>`);
+                  details.push(`<div><dt class="inline font-semibold text-indigo-800">Médico de salida:</dt> <dd class="inline font-semibold text-indigo-950">${esc(p.medicoSalida.trim())}</dd></div>`);
+                } else if ((p.medico || '').trim()) {
+                  details.push(`<div><dt class="inline font-semibold text-slate-900">Médico que lo atendió:</dt> <dd class="inline">${esc(p.medico.trim())}</dd></div>`);
+                }
+                if (hasDistinctDischargeNurse(p)) {
+                  if ((p.enfermera || '').trim()) details.push(`<div><dt class="inline font-semibold text-slate-900">Enfermera de ingreso:</dt> <dd class="inline">${esc(p.enfermera.trim())}</dd></div>`);
+                  details.push(`<div><dt class="inline font-semibold text-indigo-800">Enfermera de salida:</dt> <dd class="inline font-semibold text-indigo-950">${esc(p.enfermeraSalida.trim())}</dd></div>`);
+                } else if ((p.enfermera || '').trim()) {
+                  details.push(`<div><dt class="inline font-semibold text-slate-900">Enfermera que lo atendió:</dt> <dd class="inline">${esc(p.enfermera.trim())}</dd></div>`);
+                }
                 if ((p.diagnostico || '').trim()) details.push(`<div class="sm:col-span-2"><dt class="inline font-semibold text-slate-900">Diagnóstico:</dt> <dd class="inline">${esc(p.diagnostico.trim())}</dd></div>`);
                 if ((p.observacionesSalida || '').trim()) details.push(`<div class="sm:col-span-2"><dt class="inline font-semibold text-slate-900">Obs. salida:</dt> <dd class="inline">${esc(p.observacionesSalida.trim())}</dd></div>`);
 
@@ -2476,6 +2651,10 @@
                         <button type="button" data-action="edit-patient" data-id="${esc(p.id)}"
                           class="min-h-[40px] rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0">
                           Editar
+                        </button>
+                        <button type="button" data-action="open-modify-movement" data-id="${esc(p.id)}"
+                          class="min-h-[40px] rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-950 hover:bg-amber-100 whitespace-nowrap shrink-0">
+                          Modificar registro
                         </button>
                         ${admin ? `
                           <button type="button" data-action="open-delete-single" data-id="${esc(p.id)}" class="min-h-[40px] rounded-xl border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 whitespace-nowrap shrink-0">Eliminar</button>
@@ -2967,6 +3146,89 @@
                     ${renderTime12hControl('hosp-discharge-salida', hdm.horaSalida)}
                   </div>
 
+                  <div class="space-y-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3.5">
+                    <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <span class="text-xs font-bold text-slate-800">Responsables de la salida</span>
+                      <label class="inline-flex cursor-pointer items-center gap-2 text-xs font-semibold text-indigo-950">
+                        <input id="hd-same-staff" data-hosp-discharge-field="sameStaffAsAdmission" type="checkbox" ${hdm.sameStaffAsAdmission ? 'checked' : ''}
+                          class="h-4 w-4 rounded border-slate-300 text-indigo-700" />
+                        <span>Mismos responsables del ingreso</span>
+                      </label>
+                    </div>
+                    ${hdm.sameStaffAsAdmission ? `
+                      ${((patient.medico || '').trim() || (patient.enfermera || '').trim()) ? `
+                        <div class="grid grid-cols-1 gap-2 rounded-lg border border-slate-200 bg-white p-3 text-xs sm:grid-cols-2">
+                          <div>
+                            <span class="font-semibold text-slate-500">Médico que lo atendió:</span>
+                            <div class="mt-0.5 font-semibold text-slate-900">${esc((patient.medico || '').trim() || 'Sin capturar en ingreso')}</div>
+                          </div>
+                          <div>
+                            <span class="font-semibold text-slate-500">Enfermera que lo atendió:</span>
+                            <div class="mt-0.5 font-semibold text-slate-900">${esc((patient.enfermera || '').trim() || 'Sin capturar en ingreso')}</div>
+                          </div>
+                        </div>` : ''}
+                      ${!(patient.medico || '').trim() ? `
+                        <div>
+                          <div class="flex items-center justify-between gap-2 mb-1">
+                            <label for="hd-adm-medico" class="text-xs font-bold text-slate-700">Médico que lo atendió</label>
+                            ${renderMicButton('hosp-discharge:admissionDoctorName', 'médico')}
+                          </div>
+                          <div class="flex gap-1.5">
+                            <select data-hosp-discharge-field="admissionDoctorTitle" aria-label="Título médico" class="min-h-[40px] rounded-xl border border-slate-300 bg-white px-2.5 text-xs font-bold text-slate-900">
+                              <option value="DR." ${hdm.admissionDoctorTitle === 'DR.' ? 'selected' : ''}>DR.</option>
+                              <option value="DRA." ${hdm.admissionDoctorTitle === 'DRA.' ? 'selected' : ''}>DRA.</option>
+                            </select>
+                            <input id="hd-adm-medico" data-hosp-discharge-field="admissionDoctorName" type="text" value="${esc(hdm.admissionDoctorName)}" placeholder="Nombre del médico responsable"
+                              class="flex-1 min-h-[40px] rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-indigo-700 focus:outline-none" />
+                          </div>
+                          <p class="mt-1 text-[11px] text-slate-500">Se guardará como: <strong>${esc(formatDoctor(hdm.admissionDoctorTitle, hdm.admissionDoctorName) || '—')}</strong></p>
+                        </div>` : ''}
+                      ${!(patient.enfermera || '').trim() ? `
+                        <div>
+                          <div class="flex items-center justify-between gap-2 mb-1">
+                            <label for="hd-adm-enf" class="text-xs font-bold text-slate-700">Enfermera que lo atendió</label>
+                            ${renderMicButton('hosp-discharge:admissionNurseName', 'enfermera')}
+                          </div>
+                          <input id="hd-adm-enf" data-hosp-discharge-field="admissionNurseName" type="text" value="${esc(hdm.admissionNurseName)}" placeholder="Nombre de la enfermera responsable"
+                            class="w-full min-h-[40px] rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-indigo-700 focus:outline-none" />
+                          <p class="mt-1 text-[11px] text-slate-500">Se guardará como: <strong>${esc(formatNurse(hdm.admissionNurseName) || '—')}</strong></p>
+                        </div>` : ''}
+                      <p class="text-[11px] text-slate-500">Se conservarán los mismos responsables del ingreso. Desmarca la casilla si fueron diferentes al dar la salida.</p>
+                    ` : `
+                      ${((patient.medico || '').trim() || (patient.enfermera || '').trim()) ? `
+                        <div class="rounded-lg border border-indigo-200 bg-indigo-50/60 px-3 py-2 text-xs text-indigo-950">
+                          <strong>Ingreso conservado:</strong> ${[(patient.medico || '').trim() ? `Médico de ingreso: ${esc(patient.medico.trim())}` : '', (patient.enfermera || '').trim() ? `Enfermera de ingreso: ${esc(patient.enfermera.trim())}` : ''].filter(Boolean).join(' · ')}
+                        </div>` : ''}
+                      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <div class="flex items-center justify-between gap-2 mb-1">
+                            <label for="hd-out-medico" class="text-xs font-bold text-slate-700">Médico de salida</label>
+                            ${renderMicButton('hosp-discharge:dischargeDoctorName', 'médico de salida')}
+                          </div>
+                          <div class="flex gap-1.5">
+                            <select data-hosp-discharge-field="dischargeDoctorTitle" aria-label="Título médico de salida" class="min-h-[40px] rounded-xl border border-slate-300 bg-white px-2.5 text-xs font-bold text-slate-900">
+                              <option value="DR." ${hdm.dischargeDoctorTitle === 'DR.' ? 'selected' : ''}>DR.</option>
+                              <option value="DRA." ${hdm.dischargeDoctorTitle === 'DRA.' ? 'selected' : ''}>DRA.</option>
+                            </select>
+                            <input id="hd-out-medico" data-hosp-discharge-field="dischargeDoctorName" type="text" value="${esc(hdm.dischargeDoctorName)}" placeholder="Doctor responsable de la salida"
+                              class="flex-1 min-h-[40px] rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-indigo-700 focus:outline-none" />
+                          </div>
+                          <p class="mt-1 text-[11px] text-slate-500">Se guardará como: <strong>${esc(formatDoctor(hdm.dischargeDoctorTitle, hdm.dischargeDoctorName) || '—')}</strong></p>
+                        </div>
+                        <div>
+                          <div class="flex items-center justify-between gap-2 mb-1">
+                            <label for="hd-out-enf" class="text-xs font-bold text-slate-700">Enfermera de salida</label>
+                            ${renderMicButton('hosp-discharge:dischargeNurseName', 'enfermera de salida')}
+                          </div>
+                          <input id="hd-out-enf" data-hosp-discharge-field="dischargeNurseName" type="text" value="${esc(hdm.dischargeNurseName)}" placeholder="Enfermera responsable de la salida"
+                            class="w-full min-h-[40px] rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-indigo-700 focus:outline-none" />
+                          <p class="mt-1 text-[11px] text-slate-500">Se guardará como: <strong>${esc(formatNurse(hdm.dischargeNurseName) || '—')}</strong></p>
+                        </div>
+                      </div>
+                      <p class="text-[11px] text-slate-500">Si fueron distintos a los del ingreso, se mostrarán ambas etapas en el historial y reportes.</p>
+                    `}
+                  </div>
+
                   <div>
                     <div class="flex items-center justify-between gap-2 mb-1.5">
                       <label for="hd-obs" class="text-xs font-bold text-slate-800">Observaciones</label>
@@ -2975,7 +3237,7 @@
                     <textarea id="hd-obs" data-hosp-discharge-field="observacionesSalida" rows="3" maxlength="1500"
                       placeholder="Registra novedades u observaciones de la salida (opcional)..."
                       class="w-full rounded-xl border border-slate-300 p-3 text-sm text-slate-900 focus:border-indigo-700 focus:outline-none">${esc(hdm.observacionesSalida)}</textarea>
-                    <p class="mt-1 text-[11px] text-slate-500">Al guardar, el paciente saldrá del conteo de Hospitalización y se sumará a Atendidos, conservando su tipo de alta, fecha de salida y observaciones.</p>
+                    <p class="mt-1 text-[11px] text-slate-500">Al guardar, el paciente saldrá del conteo de Hospitalización y se sumará a Atendidos, conservando su tipo de alta, fecha de salida, responsables y observaciones.</p>
                   </div>
 
                   <div>
@@ -3248,6 +3510,214 @@
                   <button type="button" data-action="close-readmission" class="min-h-[42px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700">Cancelar</button>
                   <button type="button" data-action="save-readmission" data-open-wa="1" ${state.isSaving ? 'disabled' : ''} class="min-h-[42px] rounded-xl border border-emerald-700 bg-emerald-50 px-4 py-2 text-xs font-bold text-emerald-900 hover:bg-emerald-100">Guardar y abrir WhatsApp</button>
                   <button type="button" data-action="save-readmission" data-open-wa="0" ${state.isSaving ? 'disabled' : ''} class="min-h-[42px] rounded-xl bg-violet-700 px-5 py-2 text-xs font-bold text-white hover:bg-violet-800">Guardar reingreso</button>
+                </div>
+              </div>
+            </div>`;
+        }
+      }
+
+      // Modal 1e: Modificar registro (corrección de tipo de movimiento y eliminación de reingreso erróneo)
+      if (state.modifyMovementModal) {
+        const mm = state.modifyMovementModal;
+        const patient = state.patients.find((p) => p.id === mm.patientId);
+        if (patient) {
+          const keepingReadm = mm.initialHasReadmission && !mm.removeReadmission;
+          const movementOptions = [
+            { value: 'en_atencion', label: 'Activo (En atención)', desc: 'Sin salida registrada. Revierte un movimiento erróneo.' },
+            { value: 'atendido', label: 'Atendido', desc: 'Recibió valoración o atención y registró salida.' },
+            { value: 'no_espero_turno', label: 'No esperó turno', desc: 'Se retiró antes de pasar a consulta o valoración.' },
+            { value: 'no_atendido', label: 'No atendido', desc: 'No fue posible brindarle atención en esta unidad.' },
+            { value: 'trasladado', label: 'Trasladado a otra unidad', desc: 'Referido o trasladado a otro centro.' },
+            { value: 'hospitalizado', label: 'Hospitalización', desc: 'Ingresado a hospitalización bajo valoración médica.' }
+          ];
+          const showDischargeStaff = mm.estadoEgreso === 'atendido' && Boolean(mm.tipoAltaHospitalizacion);
+          html += `
+            <div class="fixed inset-0 z-40 flex items-end sm:items-center justify-center bg-slate-950/60 p-0 sm:p-5 overflow-y-auto">
+              <div role="dialog" aria-modal="true" aria-label="Modificar registro" class="w-full max-w-2xl rounded-t-2xl sm:rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 max-h-[92vh] overflow-y-auto">
+                <div class="flex items-start justify-between gap-4 border-b border-slate-200 pb-3">
+                  <div>
+                    <div class="text-[11px] font-bold uppercase tracking-wider text-teal-800">Corrección de movimiento</div>
+                    <h2 class="mt-0.5 text-lg font-bold text-slate-900">Modificar registro</h2>
+                    <p class="text-xs text-slate-600">${[patient.nombre ? esc(patient.nombre) : '', formatIsoDateEs(patient.fechaRegistro) ? `Fecha: ${esc(formatIsoDateEs(patient.fechaRegistro))}` : '', fmt12(patient.horaEntrada) ? `Entrada: ${esc(fmt12(patient.horaEntrada))}` : ''].filter(Boolean).join(' · ')}</p>
+                  </div>
+                  <button type="button" data-action="close-modify-movement" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Cerrar</button>
+                </div>
+
+                ${mm.error ? `<div role="alert" class="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800">${esc(mm.error)}</div>` : ''}
+
+                <div class="mt-4 space-y-4">
+                  ${mm.initialHasReadmission ? `
+                    <div class="space-y-3 rounded-xl border border-violet-200 bg-violet-50/60 p-3.5">
+                      <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <span class="text-xs font-bold text-violet-950">Datos de reingreso</span>
+                        <button type="button" data-action="modify-toggle-remove-readm"
+                          class="min-h-[36px] rounded-lg border px-3 py-1 text-xs font-semibold transition-colors ${mm.removeReadmission ? 'border-violet-700 bg-white text-violet-900 hover:bg-violet-100' : 'border-red-300 bg-white text-red-800 hover:bg-red-50'}">
+                          ${mm.removeReadmission ? 'Conservar datos de reingreso' : 'Eliminar reingreso erróneo'}
+                        </button>
+                      </div>
+                      ${mm.removeReadmission ? `
+                        <div class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
+                          Al guardar se eliminarán únicamente los datos de reingreso (2ª entrada, 2ª salida y marca de reingreso), conservando el paciente y su primera visita sin duplicados.
+                        </div>
+                      ` : `
+                        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          <div>
+                            <label for="mm-fecha-segunda" class="block text-xs font-bold text-violet-950 mb-1">Fecha de segunda entrada</label>
+                            <input id="mm-fecha-segunda" data-modify-field="fechaSegundaEntrada" type="date" value="${esc(mm.fechaSegundaEntrada)}"
+                              class="min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-sm text-slate-900 focus:border-violet-700 focus:outline-none" />
+                          </div>
+                          <div>
+                            <label class="block text-xs font-bold text-violet-950 mb-1">Segunda entrada (12 h)</label>
+                            ${renderTime12hControl('modify-segunda-entrada', mm.horaSegundaEntrada)}
+                          </div>
+                          ${mm.estadoEgreso !== 'en_atencion' ? `
+                            <div class="sm:col-span-2">
+                              <label class="block text-xs font-bold text-violet-950 mb-1">Segunda salida (12 h)</label>
+                              ${renderTime12hControl('modify-segunda-salida', mm.horaSegundaSalida)}
+                            </div>` : ''}
+                        </div>
+                      `}
+                    </div>` : ''}
+
+                  <div>
+                    <span class="block text-xs font-bold text-slate-800 mb-1.5">Tipo de movimiento / estado del paciente</span>
+                    <div class="grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Seleccionar tipo de movimiento">
+                      ${movementOptions.map((opt) => `
+                        <button type="button" data-action="modify-set-outcome" data-val="${opt.value}"
+                          class="rounded-xl border p-3 text-left transition-colors ${
+                            mm.estadoEgreso === opt.value
+                              ? 'border-teal-700 bg-teal-50/80 text-teal-950 ring-2 ring-teal-700/15'
+                              : 'border-slate-300 bg-white text-slate-800 hover:bg-slate-50'
+                          }">
+                          <div class="text-sm font-bold">${opt.label}</div>
+                          <div class="mt-0.5 text-xs text-slate-600">${opt.desc}</div>
+                        </button>
+                      `).join('')}
+                    </div>
+                    ${mm.estadoEgreso === 'en_atencion' && !keepingReadm ? `<p class="mt-1.5 text-[11px] text-amber-900">Al guardar como Activo se limpiarán los datos de salida, traslado o alta hospitalaria erróneos, conservando el ingreso original.</p>` : ''}
+                  </div>
+
+                  ${mm.estadoEgreso === 'trasladado' ? `
+                    <div>
+                      <div class="flex items-center justify-between gap-2 mb-1.5">
+                        <label for="mm-destino" class="text-xs font-bold text-slate-800">Destino del traslado</label>
+                        ${renderMicButton('modify:destinoTraslado', 'destino')}
+                      </div>
+                      <input id="mm-destino" data-modify-field="destinoTraslado" type="text" value="${esc(mm.destinoTraslado)}" placeholder="Hospital o unidad receptora"
+                        class="w-full min-h-[42px] rounded-xl border border-slate-300 px-3 text-sm text-slate-900 focus:border-teal-700 focus:outline-none" />
+                    </div>` : ''}
+
+                  ${mm.estadoEgreso === 'atendido' ? `
+                    <div class="space-y-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3.5">
+                      <div>
+                        <span class="block text-xs font-bold text-slate-700 mb-1.5">Tipo de alta (solo si egresó de hospitalización)</span>
+                        <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                          <button type="button" data-action="modify-set-alta" data-val="" class="min-h-[38px] rounded-xl border px-3 py-1.5 text-xs font-semibold ${mm.tipoAltaHospitalizacion === '' ? 'border-teal-700 bg-teal-700 text-white' : 'border-slate-300 bg-white text-slate-700'}">Sin alta hospitalaria</button>
+                          <button type="button" data-action="modify-set-alta" data-val="alta_medica" class="min-h-[38px] rounded-xl border px-3 py-1.5 text-xs font-semibold ${mm.tipoAltaHospitalizacion === 'alta_medica' ? 'border-indigo-700 bg-indigo-700 text-white' : 'border-slate-300 bg-white text-slate-700'}">Alta médica</button>
+                          <button type="button" data-action="modify-set-alta" data-val="alta_voluntaria" class="min-h-[38px] rounded-xl border px-3 py-1.5 text-xs font-semibold ${mm.tipoAltaHospitalizacion === 'alta_voluntaria' ? 'border-indigo-700 bg-indigo-700 text-white' : 'border-slate-300 bg-white text-slate-700'}">Alta voluntaria</button>
+                        </div>
+                      </div>
+                      ${mm.tipoAltaHospitalizacion ? `
+                        <div>
+                          <label for="mm-fecha-salida" class="block text-xs font-bold text-slate-700 mb-1">Fecha de salida</label>
+                          <div class="flex flex-wrap items-center gap-2">
+                            <input id="mm-fecha-salida" data-modify-field="fechaSalida" type="date" value="${esc(mm.fechaSalida)}"
+                              class="min-h-[42px] flex-1 min-w-[180px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-sm text-slate-900 focus:border-indigo-700 focus:outline-none" />
+                            <button type="button" data-action="modify-date-today" class="min-h-[42px] rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700">Hoy</button>
+                          </div>
+                        </div>` : ''}
+                    </div>` : ''}
+
+                  ${(mm.estadoEgreso !== 'en_atencion' || keepingReadm) ? `
+                    <div>
+                      <label class="block text-xs font-bold text-slate-800 mb-1.5">${keepingReadm ? 'Primera salida (12 h)' : 'Hora de salida (12 h)'}</label>
+                      ${renderTime12hControl('modify-salida', mm.horaSalida)}
+                    </div>` : ''}
+
+                  <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <div class="flex items-center justify-between gap-2 mb-1">
+                        <label for="mm-medico" class="text-xs font-bold text-slate-800">${showDischargeStaff && !mm.sameStaffAsAdmission ? 'Médico de ingreso' : 'Médico que lo atendió'}</label>
+                        ${renderMicButton('modify:doctorName', 'médico')}
+                      </div>
+                      <div class="flex gap-1.5">
+                        <select data-modify-field="doctorTitle" aria-label="Título médico" class="min-h-[40px] rounded-xl border border-slate-300 bg-slate-50 px-2.5 text-xs font-bold text-slate-900">
+                          <option value="DR." ${mm.doctorTitle === 'DR.' ? 'selected' : ''}>DR.</option>
+                          <option value="DRA." ${mm.doctorTitle === 'DRA.' ? 'selected' : ''}>DRA.</option>
+                        </select>
+                        <input id="mm-medico" data-modify-field="doctorName" type="text" value="${esc(mm.doctorName)}" placeholder="Nombre y apellidos"
+                          class="flex-1 min-h-[40px] rounded-xl border border-slate-300 px-3 text-sm text-slate-900 focus:border-teal-700 focus:outline-none" />
+                      </div>
+                    </div>
+                    <div>
+                      <div class="flex items-center justify-between gap-2 mb-1">
+                        <label for="mm-enf" class="text-xs font-bold text-slate-800">${showDischargeStaff && !mm.sameStaffAsAdmission ? 'Enfermera de ingreso' : 'Enfermera que lo atendió'}</label>
+                        ${renderMicButton('modify:nurseName', 'enfermera')}
+                      </div>
+                      <input id="mm-enf" data-modify-field="nurseName" type="text" value="${esc(mm.nurseName)}" placeholder="Nombre y apellidos"
+                        class="w-full min-h-[40px] rounded-xl border border-slate-300 px-3 text-sm text-slate-900 focus:border-teal-700 focus:outline-none" />
+                    </div>
+                  </div>
+
+                  ${showDischargeStaff ? `
+                    <div class="space-y-3 rounded-xl border border-indigo-200 bg-indigo-50/40 p-3.5">
+                      <label class="inline-flex cursor-pointer items-center gap-2 text-xs font-semibold text-indigo-950">
+                        <input id="mm-same-staff" data-modify-field="sameStaffAsAdmission" type="checkbox" ${mm.sameStaffAsAdmission ? 'checked' : ''} class="h-4 w-4 rounded border-slate-300 text-indigo-700" />
+                        <span>Mismos responsables del ingreso al dar salida</span>
+                      </label>
+                      ${!mm.sameStaffAsAdmission ? `
+                        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          <div>
+                            <div class="flex items-center justify-between gap-2 mb-1">
+                              <label for="mm-out-medico" class="text-xs font-bold text-slate-700">Médico de salida</label>
+                              ${renderMicButton('modify:dischargeDoctorName', 'médico de salida')}
+                            </div>
+                            <div class="flex gap-1.5">
+                              <select data-modify-field="dischargeDoctorTitle" aria-label="Título médico de salida" class="min-h-[40px] rounded-xl border border-slate-300 bg-white px-2.5 text-xs font-bold text-slate-900">
+                                <option value="DR." ${mm.dischargeDoctorTitle === 'DR.' ? 'selected' : ''}>DR.</option>
+                                <option value="DRA." ${mm.dischargeDoctorTitle === 'DRA.' ? 'selected' : ''}>DRA.</option>
+                              </select>
+                              <input id="mm-out-medico" data-modify-field="dischargeDoctorName" type="text" value="${esc(mm.dischargeDoctorName)}" placeholder="Doctor responsable de salida"
+                                class="flex-1 min-h-[40px] rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-indigo-700 focus:outline-none" />
+                            </div>
+                          </div>
+                          <div>
+                            <div class="flex items-center justify-between gap-2 mb-1">
+                              <label for="mm-out-enf" class="text-xs font-bold text-slate-700">Enfermera de salida</label>
+                              ${renderMicButton('modify:dischargeNurseName', 'enfermera de salida')}
+                            </div>
+                            <input id="mm-out-enf" data-modify-field="dischargeNurseName" type="text" value="${esc(mm.dischargeNurseName)}" placeholder="Enfermera responsable de salida"
+                              class="w-full min-h-[40px] rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-indigo-700 focus:outline-none" />
+                          </div>
+                        </div>` : ''}
+                    </div>` : ''}
+
+                  <div>
+                    <div class="flex items-center justify-between gap-2 mb-1">
+                      <label for="mm-dx" class="text-xs font-bold text-slate-800">Diagnóstico</label>
+                      ${renderMicButton('modify:diagnostico', 'diagnóstico')}
+                    </div>
+                    <textarea id="mm-dx" data-modify-field="diagnostico" rows="2" maxlength="1500" placeholder="Diagnóstico capturado (opcional)"
+                      class="w-full rounded-xl border border-slate-300 p-3 text-sm text-slate-900 focus:border-teal-700 focus:outline-none">${esc(mm.diagnostico)}</textarea>
+                  </div>
+
+                  <div>
+                    <div class="flex items-center justify-between gap-2 mb-1">
+                      <label for="mm-obs" class="text-xs font-bold text-slate-800">Observaciones de salida</label>
+                      ${renderMicButton('modify:observacionesSalida', 'observaciones de salida')}
+                    </div>
+                    <textarea id="mm-obs" data-modify-field="observacionesSalida" rows="2" maxlength="1500" placeholder="Observaciones del movimiento o salida (opcional)"
+                      class="w-full rounded-xl border border-slate-300 p-3 text-sm text-slate-900 focus:border-teal-700 focus:outline-none">${esc(mm.observacionesSalida)}</textarea>
+                  </div>
+
+                  <div>
+                    <button type="button" data-action="spellcheck-modify-movement" class="min-h-[40px] rounded-xl border border-teal-300 bg-teal-50 px-3.5 py-2 text-xs font-bold text-teal-900 hover:bg-teal-100">Rectificar escritura y ortografía</button>
+                  </div>
+                </div>
+
+                <div class="mt-5 flex flex-col-reverse gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:justify-end">
+                  <button type="button" data-action="close-modify-movement" class="min-h-[42px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700">Cancelar</button>
+                  <button type="button" data-action="save-modify-movement" ${state.isSaving ? 'disabled' : ''} class="min-h-[42px] rounded-xl bg-teal-700 px-5 py-2 text-xs font-bold text-white hover:bg-teal-800">Guardar corrección</button>
                 </div>
               </div>
             </div>`;
@@ -3654,9 +4124,28 @@
       }
 
       if (target.dataset.hospDischargeField && state.hospitalizedDischargeModal) {
-        state.hospitalizedDischargeModal[target.dataset.hospDischargeField] = target.value;
-        if (target.dataset.hospDischargeField === 'fechaSalida') {
+        const fld = target.dataset.hospDischargeField;
+        if (fld === 'sameStaffAsAdmission') return;
+        state.hospitalizedDischargeModal[fld] = target.value;
+        if (fld === 'fechaSalida') {
           state.hospitalizedDischargeModal.fechaSalida = normalizeIsoDate(target.value) || getTodayIsoDate();
+          render();
+        } else if (['admissionDoctorName', 'admissionNurseName', 'dischargeDoctorName', 'dischargeNurseName'].includes(fld)) {
+          const pos = target.selectionStart;
+          const id = target.id;
+          render();
+          const el = document.getElementById(id);
+          if (el) { el.focus(); if (pos !== null) el.setSelectionRange(pos, pos); }
+        }
+        return;
+      }
+
+      if (target.dataset.modifyField && state.modifyMovementModal) {
+        const fld = target.dataset.modifyField;
+        if (fld === 'sameStaffAsAdmission') return;
+        state.modifyMovementModal[fld] = target.value;
+        if (fld === 'fechaSalida' || fld === 'fechaSegundaEntrada') {
+          state.modifyMovementModal[fld] = normalizeIsoDate(target.value) || getTodayIsoDate();
           render();
         }
         return;
@@ -3711,10 +4200,42 @@
         return;
       }
 
-      if (target.dataset.hospDischargeField === 'fechaSalida' && state.hospitalizedDischargeModal) {
-        state.hospitalizedDischargeModal.fechaSalida = normalizeIsoDate(target.value) || getTodayIsoDate();
-        render();
-        return;
+      if (target.dataset.hospDischargeField && state.hospitalizedDischargeModal) {
+        const fld = target.dataset.hospDischargeField;
+        if (fld === 'fechaSalida') {
+          state.hospitalizedDischargeModal.fechaSalida = normalizeIsoDate(target.value) || getTodayIsoDate();
+          render();
+          return;
+        }
+        if (fld === 'sameStaffAsAdmission') {
+          state.hospitalizedDischargeModal.sameStaffAsAdmission = Boolean(target.checked);
+          render();
+          return;
+        }
+        if (fld === 'admissionDoctorTitle' || fld === 'dischargeDoctorTitle') {
+          state.hospitalizedDischargeModal[fld] = target.value === 'DRA.' ? 'DRA.' : 'DR.';
+          render();
+          return;
+        }
+      }
+
+      if (target.dataset.modifyField && state.modifyMovementModal) {
+        const fld = target.dataset.modifyField;
+        if (fld === 'fechaSalida' || fld === 'fechaSegundaEntrada') {
+          state.modifyMovementModal[fld] = normalizeIsoDate(target.value) || getTodayIsoDate();
+          render();
+          return;
+        }
+        if (fld === 'sameStaffAsAdmission') {
+          state.modifyMovementModal.sameStaffAsAdmission = Boolean(target.checked);
+          render();
+          return;
+        }
+        if (fld === 'doctorTitle' || fld === 'dischargeDoctorTitle') {
+          state.modifyMovementModal[fld] = target.value === 'DRA.' ? 'DRA.' : 'DR.';
+          render();
+          return;
+        }
       }
 
       if (target.dataset.readmField === 'fechaSegundaEntrada' && state.readmissionModal) {
@@ -3734,7 +4255,13 @@
                 ? state.transferModal?.horaSalida
                 : prefix === 'readm-entry'
                   ? state.readmissionModal?.horaSegundaEntrada
-                  : state.dischargeModal?.horaSalida;
+                  : prefix === 'modify-salida'
+                    ? state.modifyMovementModal?.horaSalida
+                    : prefix === 'modify-segunda-entrada'
+                      ? state.modifyMovementModal?.horaSegundaEntrada
+                      : prefix === 'modify-segunda-salida'
+                        ? state.modifyMovementModal?.horaSegundaSalida
+                        : state.dischargeModal?.horaSalida;
         const cur = parse24To12(current || nowTime24());
         cur[part] = target.value;
         const next24 = to24From12(cur.h || '12', cur.m || '00', cur.p || 'AM');
@@ -3743,6 +4270,9 @@
         if (prefix === 'hosp-discharge-salida' && state.hospitalizedDischargeModal) state.hospitalizedDischargeModal.horaSalida = next24;
         if (prefix === 'transfer-salida' && state.transferModal) state.transferModal.horaSalida = next24;
         if (prefix === 'readm-entry' && state.readmissionModal) state.readmissionModal.horaSegundaEntrada = next24;
+        if (prefix === 'modify-salida' && state.modifyMovementModal) state.modifyMovementModal.horaSalida = next24;
+        if (prefix === 'modify-segunda-entrada' && state.modifyMovementModal) state.modifyMovementModal.horaSegundaEntrada = next24;
+        if (prefix === 'modify-segunda-salida' && state.modifyMovementModal) state.modifyMovementModal.horaSegundaSalida = next24;
         render();
         return;
       }
@@ -3881,6 +4411,9 @@
           if (btn.dataset.prefix === 'hosp-discharge-salida' && state.hospitalizedDischargeModal) state.hospitalizedDischargeModal.horaSalida = now;
           if (btn.dataset.prefix === 'transfer-salida' && state.transferModal) state.transferModal.horaSalida = now;
           if (btn.dataset.prefix === 'readm-entry' && state.readmissionModal) state.readmissionModal.horaSegundaEntrada = now;
+          if (btn.dataset.prefix === 'modify-salida' && state.modifyMovementModal) state.modifyMovementModal.horaSalida = now;
+          if (btn.dataset.prefix === 'modify-segunda-entrada' && state.modifyMovementModal) state.modifyMovementModal.horaSegundaEntrada = now;
+          if (btn.dataset.prefix === 'modify-segunda-salida' && state.modifyMovementModal) state.modifyMovementModal.horaSegundaSalida = now;
           render();
           break;
         }
@@ -3913,6 +4446,9 @@
             } else if (scope === 'transfer' && state.transferModal) {
               const cur = (state.transferModal[field] || '').trim();
               state.transferModal[field] = cur ? `${cur} ${spoken}` : spoken;
+            } else if (scope === 'modify' && state.modifyMovementModal) {
+              const cur = (state.modifyMovementModal[field] || '').trim();
+              state.modifyMovementModal[field] = cur ? `${cur} ${spoken}` : spoken;
             }
           });
           break;
@@ -4016,14 +4552,58 @@
           const proposals = [
             reviewTextField('observacionesSalida', 'Observaciones', hdm.observacionesSalida)
           ];
+          if (hdm.sameStaffAsAdmission) {
+            if ((hdm.admissionDoctorName || '').trim()) proposals.push(reviewTextField('medico', 'Médico', hdm.admissionDoctorName));
+            if ((hdm.admissionNurseName || '').trim()) proposals.push(reviewTextField('enfermera', 'Enfermera', hdm.admissionNurseName));
+          } else {
+            if ((hdm.dischargeDoctorName || '').trim()) proposals.push(reviewTextField('medicoSalida', 'Médico de salida', hdm.dischargeDoctorName));
+            if ((hdm.dischargeNurseName || '').trim()) proposals.push(reviewTextField('enfermeraSalida', 'Enfermera de salida', hdm.dischargeNurseName));
+          }
           state.spellModal = {
             proposals,
             onApply: () => {
               for (const p of proposals) {
                 if (!p.changed || !state.hospitalizedDischargeModal) continue;
-                state.hospitalizedDischargeModal[p.field] = p.proposed;
+                if (p.field === 'medico') state.hospitalizedDischargeModal.admissionDoctorName = stripDoctorPrefix(p.proposed);
+                else if (p.field === 'enfermera') state.hospitalizedDischargeModal.admissionNurseName = stripNursePrefix(p.proposed);
+                else if (p.field === 'medicoSalida') state.hospitalizedDischargeModal.dischargeDoctorName = stripDoctorPrefix(p.proposed);
+                else if (p.field === 'enfermeraSalida') state.hospitalizedDischargeModal.dischargeNurseName = stripNursePrefix(p.proposed);
+                else state.hospitalizedDischargeModal[p.field] = p.proposed;
               }
-              showToast('Ortografía de observaciones rectificada.');
+              showToast('Ortografía de salida rectificada.');
+            }
+          };
+          render();
+          break;
+        }
+        case 'spellcheck-modify-movement': {
+          if (!state.modifyMovementModal) break;
+          const mm = state.modifyMovementModal;
+          const proposals = [
+            reviewTextField('medico', 'Médico', mm.doctorName),
+            reviewTextField('enfermera', 'Enfermera', mm.nurseName),
+            reviewTextField('diagnostico', 'Diagnóstico', mm.diagnostico),
+            reviewTextField('observacionesSalida', 'Observaciones de salida', mm.observacionesSalida)
+          ];
+          if (mm.estadoEgreso === 'trasladado' && (mm.destinoTraslado || '').trim()) {
+            proposals.unshift(reviewTextField('destinoTraslado', 'Destino del traslado', mm.destinoTraslado));
+          }
+          if (mm.estadoEgreso === 'atendido' && mm.tipoAltaHospitalizacion && !mm.sameStaffAsAdmission) {
+            if ((mm.dischargeDoctorName || '').trim()) proposals.push(reviewTextField('medicoSalida', 'Médico de salida', mm.dischargeDoctorName));
+            if ((mm.dischargeNurseName || '').trim()) proposals.push(reviewTextField('enfermeraSalida', 'Enfermera de salida', mm.dischargeNurseName));
+          }
+          state.spellModal = {
+            proposals,
+            onApply: () => {
+              for (const p of proposals) {
+                if (!p.changed || !state.modifyMovementModal) continue;
+                if (p.field === 'medico') state.modifyMovementModal.doctorName = stripDoctorPrefix(p.proposed);
+                else if (p.field === 'enfermera') state.modifyMovementModal.nurseName = stripNursePrefix(p.proposed);
+                else if (p.field === 'medicoSalida') state.modifyMovementModal.dischargeDoctorName = stripDoctorPrefix(p.proposed);
+                else if (p.field === 'enfermeraSalida') state.modifyMovementModal.dischargeNurseName = stripNursePrefix(p.proposed);
+                else state.modifyMovementModal[p.field] = p.proposed;
+              }
+              showToast('Ortografía rectificada.');
             }
           };
           render();
@@ -4093,6 +4673,16 @@
           state.isSaving = true; render();
           try {
             const readmitted = hasReadmission(p);
+            const finalMedico = (p.medico || '').trim() || formatDoctor(hdm.admissionDoctorTitle, hdm.admissionDoctorName);
+            const finalEnfermera = (p.enfermera || '').trim() || formatNurse(hdm.admissionNurseName);
+            let finalMedicoSalida = '';
+            let finalEnfermeraSalida = '';
+            if (!hdm.sameStaffAsAdmission) {
+              const candDoc = formatDoctor(hdm.dischargeDoctorTitle, hdm.dischargeDoctorName);
+              const candNurse = formatNurse(hdm.dischargeNurseName);
+              if (candDoc && candDoc.toLowerCase() !== finalMedico.toLowerCase()) finalMedicoSalida = candDoc;
+              if (candNurse && candNurse.toLowerCase() !== finalEnfermera.toLowerCase()) finalEnfermeraSalida = candNurse;
+            }
             await registerDischargeCloud(p, {
               horaSalida: readmitted ? (p.horaSalida || '') : hdm.horaSalida,
               ...(readmitted ? { horaSegundaSalida: hdm.horaSalida } : {}),
@@ -4101,8 +4691,10 @@
               tipoAltaHospitalizacion: hdm.tipoAltaHospitalizacion,
               destinoTraslado: '',
               observacionesSalida: hdm.observacionesSalida,
-              medico: p.medico || '',
-              enfermera: p.enfermera || '',
+              medico: finalMedico,
+              enfermera: finalEnfermera,
+              medicoSalida: finalMedicoSalida,
+              enfermeraSalida: finalEnfermeraSalida,
               diagnostico: p.diagnostico || ''
             });
             const openWa = btn.dataset.openWa === '1';
@@ -4117,6 +4709,99 @@
               state.hospitalizedDischargeModal = null;
             } else {
               hdm.error = 'No se pudo guardar la salida del hospitalizado. Intenta nuevamente.';
+            }
+          } finally {
+            state.isSaving = false; render();
+          }
+          break;
+        }
+        case 'open-modify-movement': {
+          const p = state.patients.find((x) => x.id === btn.dataset.id);
+          if (p) openModifyMovementModal(p);
+          break;
+        }
+        case 'close-modify-movement':
+          stopVoice(); state.modifyMovementModal = null; render(); break;
+        case 'modify-toggle-remove-readm':
+          if (state.modifyMovementModal) {
+            const mm = state.modifyMovementModal;
+            mm.removeReadmission = !mm.removeReadmission;
+            mm.error = '';
+            if (mm.removeReadmission && mm.estadoEgreso === 'en_atencion' && (mm.horaSalida || '').trim()) {
+              mm.estadoEgreso = 'atendido';
+            }
+            render();
+          }
+          break;
+        case 'modify-set-outcome':
+          if (state.modifyMovementModal) {
+            state.modifyMovementModal.estadoEgreso = btn.dataset.val || 'en_atencion';
+            state.modifyMovementModal.error = '';
+            render();
+          }
+          break;
+        case 'modify-set-alta':
+          if (state.modifyMovementModal) {
+            state.modifyMovementModal.tipoAltaHospitalizacion = parseHospitalizationDischargeType(btn.dataset.val);
+            render();
+          }
+          break;
+        case 'modify-date-today':
+          if (state.modifyMovementModal) {
+            state.modifyMovementModal.fechaSalida = getTodayIsoDate();
+            render();
+          }
+          break;
+        case 'save-modify-movement': {
+          if (!state.modifyMovementModal) break;
+          const mm = state.modifyMovementModal;
+          const keepingReadm = mm.initialHasReadmission && !mm.removeReadmission;
+          if (keepingReadm && !(mm.horaSegundaEntrada || '').trim()) {
+            mm.error = 'Indica la hora de segunda entrada o marca «Eliminar reingreso erróneo».';
+            render();
+            break;
+          }
+          const p = state.patients.find((x) => x.id === mm.patientId);
+          if (!p) { state.modifyMovementModal = null; render(); break; }
+          state.isSaving = true; render();
+          try {
+            const finalMedico = formatDoctor(mm.doctorTitle, mm.doctorName);
+            const finalEnfermera = formatNurse(mm.nurseName);
+            let finalMedicoSalida = '';
+            let finalEnfermeraSalida = '';
+            if (mm.estadoEgreso === 'atendido' && mm.tipoAltaHospitalizacion && !mm.sameStaffAsAdmission) {
+              const candDoc = formatDoctor(mm.dischargeDoctorTitle, mm.dischargeDoctorName);
+              const candNurse = formatNurse(mm.dischargeNurseName);
+              if (candDoc && candDoc.toLowerCase() !== finalMedico.toLowerCase()) finalMedicoSalida = candDoc;
+              if (candNurse && candNurse.toLowerCase() !== finalEnfermera.toLowerCase()) finalEnfermeraSalida = candNurse;
+            }
+            await correctPatientMovementCloud(p, {
+              estadoEgreso: mm.estadoEgreso,
+              horaSalida: (mm.estadoEgreso === 'en_atencion' && !keepingReadm) ? '' : mm.horaSalida,
+              fechaSalida: (mm.estadoEgreso === 'atendido' && mm.tipoAltaHospitalizacion) ? (normalizeIsoDate(mm.fechaSalida) || getTodayIsoDate()) : '',
+              tipoAltaHospitalizacion: mm.estadoEgreso === 'atendido' ? mm.tipoAltaHospitalizacion : '',
+              destinoTraslado: mm.estadoEgreso === 'trasladado' ? (mm.destinoTraslado || '').trim() : '',
+              removeReadmission: mm.removeReadmission,
+              fechaSegundaEntrada: keepingReadm ? (normalizeIsoDate(mm.fechaSegundaEntrada) || getTodayIsoDate()) : '',
+              horaSegundaEntrada: keepingReadm ? mm.horaSegundaEntrada : '',
+              horaSegundaSalida: (keepingReadm && mm.estadoEgreso !== 'en_atencion') ? mm.horaSegundaSalida : '',
+              medico: finalMedico,
+              enfermera: finalEnfermera,
+              medicoSalida: finalMedicoSalida,
+              enfermeraSalida: finalEnfermeraSalida,
+              diagnostico: mm.diagnostico,
+              observacionesSalida: mm.observacionesSalida
+            });
+            const removedReadm = mm.removeReadmission;
+            state.modifyMovementModal = null;
+            showToast(removedReadm ? 'Registro corregido y reingreso erróneo eliminado.' : 'Movimiento del registro corregido y sincronizado.');
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : '';
+            if (msg.startsWith('CONFLICT:')) {
+              state.conflictNotice = msg.slice('CONFLICT:'.length);
+              state.modifyMovementModal = null;
+            } else {
+              mm.error = 'No se pudo guardar la corrección. Intenta nuevamente.';
             }
           } finally {
             state.isSaving = false; render();
@@ -4360,6 +5045,7 @@
                 if (state.hospitalizationModal?.patientId === p.id) state.hospitalizationModal = null;
                 if (state.transferModal?.patientId === p.id) state.transferModal = null;
                 if (state.readmissionModal?.patientId === p.id) state.readmissionModal = null;
+                if (state.modifyMovementModal?.patientId === p.id) state.modifyMovementModal = null;
                 if (state.whatsappModal?.patientId === p.id) state.whatsappModal = null;
               }
               state.clearModal = null;
@@ -4374,6 +5060,7 @@
               state.hospitalizationModal = null;
               state.transferModal = null;
               state.readmissionModal = null;
+              state.modifyMovementModal = null;
               state.whatsappModal = null;
               state.activeView = 'pacientes';
               showToast(`Se eliminaron ${removed} registros y quedó registrado en auditoría.`);

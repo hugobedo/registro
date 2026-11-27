@@ -51,6 +51,10 @@ export const FIELD_LABELS = {
   observacionesSalida: 'Observaciones de salida',
   medico: 'Médico que lo atendió',
   enfermera: 'Enfermera que lo atendió',
+  medicoIngreso: 'Médico de ingreso',
+  medicoSalida: 'Médico de salida',
+  enfermeraIngreso: 'Enfermera de ingreso',
+  enfermeraSalida: 'Enfermera de salida',
   diagnostico: 'Diagnóstico',
 } as const;
 

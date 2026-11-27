@@ -116,7 +116,7 @@ service cloud.firestore {
           'horaEntrada', 'horaSalida', 'horaSegundaEntrada', 'horaSegundaSalida', 'reingresosCount',
           'estadoEgreso', 'tipoAltaHospitalizacion', 'destinoTraslado', 'tratamiento', 'nombre', 'edad',
           'procedencia', 'motivoVisita', 'observaciones', 'observacionesSalida',
-          'medico', 'enfermera', 'diagnostico'
+          'medico', 'enfermera', 'medicoSalida', 'enfermeraSalida', 'diagnostico'
         ])
         && isValidId(data.id)
         && data.id == patientId
@@ -151,6 +151,8 @@ service cloud.firestore {
         && data.observacionesSalida is string && data.observacionesSalida.size() <= 1500
         && data.medico is string && data.medico.size() <= 200
         && data.enfermera is string && data.enfermera.size() <= 200
+        && (!('medicoSalida' in data) || (data.medicoSalida is string && data.medicoSalida.size() <= 200))
+        && (!('enfermeraSalida' in data) || (data.enfermeraSalida is string && data.enfermeraSalida.size() <= 200))
         && data.diagnostico is string && data.diagnostico.size() <= 1500;
     }
 
@@ -371,7 +373,7 @@ service cloud.firestore {
             'horaEntrada', 'horaSalida', 'horaSegundaEntrada', 'horaSegundaSalida', 'reingresosCount',
             'estadoEgreso', 'tipoAltaHospitalizacion', 'destinoTraslado', 'tratamiento', 'nombre', 'edad',
             'procedencia', 'motivoVisita', 'observaciones', 'observacionesSalida',
-            'medico', 'enfermera', 'diagnostico',
+            'medico', 'enfermera', 'medicoSalida', 'enfermeraSalida', 'diagnostico',
             'updatedAt', 'updatedAtIso', 'updatedByUid', 'updatedByEmail', 'version'
           ]))
           // Action 2: Approved staff registering or updating discharge, readmission, hospitalization, or transfer details
@@ -379,7 +381,7 @@ service cloud.firestore {
             'fechaSalida', 'fechaSegundaEntrada',
             'horaSalida', 'horaSegundaEntrada', 'horaSegundaSalida', 'reingresosCount',
             'estadoEgreso', 'tipoAltaHospitalizacion', 'destinoTraslado', 'observacionesSalida',
-            'medico', 'enfermera', 'diagnostico',
+            'medico', 'enfermera', 'medicoSalida', 'enfermeraSalida', 'diagnostico',
             'updatedAt', 'updatedAtIso', 'updatedByUid', 'updatedByEmail', 'version'
           ]))
           // Action 3: Approved staff editing patient registration details (cannot delete)
@@ -388,7 +390,7 @@ service cloud.firestore {
             'horaEntrada', 'horaSalida', 'horaSegundaEntrada', 'horaSegundaSalida', 'reingresosCount',
             'estadoEgreso', 'tipoAltaHospitalizacion', 'destinoTraslado', 'tratamiento', 'nombre', 'edad',
             'procedencia', 'motivoVisita', 'observaciones', 'observacionesSalida',
-            'medico', 'enfermera', 'diagnostico',
+            'medico', 'enfermera', 'medicoSalida', 'enfermeraSalida', 'diagnostico',
             'updatedAt', 'updatedAtIso', 'updatedByUid', 'updatedByEmail', 'version'
           ]))
         );

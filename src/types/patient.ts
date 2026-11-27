@@ -56,6 +56,8 @@ export interface PatientRecord {
   observacionesSalida: string;
   medico: string;
   enfermera: string;
+  medicoSalida: string;
+  enfermeraSalida: string;
   diagnostico: string;
   version: number;
   createdByUid?: string;
@@ -160,6 +162,8 @@ export type ReviewableFieldKey =
   | 'destinoTraslado'
   | 'medico'
   | 'enfermera'
+  | 'medicoSalida'
+  | 'enfermeraSalida'
   | 'diagnostico';
 
 export interface FieldCorrectionProposal {
@@ -197,6 +201,22 @@ export function isHospitalizationDischargeType(
   value: unknown
 ): value is HospitalizationDischargeType {
   return value === '' || value === 'alta_medica' || value === 'alta_voluntaria';
+}
+
+export function hasDistinctDischargeDoctor(
+  patient: Pick<PatientRecord, 'medico' | 'medicoSalida'>
+): boolean {
+  const outDoctor = (patient.medicoSalida || '').trim();
+  if (!outDoctor) return false;
+  return outDoctor.toLowerCase() !== (patient.medico || '').trim().toLowerCase();
+}
+
+export function hasDistinctDischargeNurse(
+  patient: Pick<PatientRecord, 'enfermera' | 'enfermeraSalida'>
+): boolean {
+  const outNurse = (patient.enfermeraSalida || '').trim();
+  if (!outNurse) return false;
+  return outNurse.toLowerCase() !== (patient.enfermera || '').trim().toLowerCase();
 }
 
 export function hasReadmission(
